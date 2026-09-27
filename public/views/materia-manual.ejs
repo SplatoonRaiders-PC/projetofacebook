@@ -1,7 +1,7 @@
 <%- include('partials/app-start') %>
   <link rel="stylesheet" href="/css/materia-chat.css?v=20260902tomTitulosClaude1" />
   <link rel="stylesheet" href="/css/materia-manual.css?v=20260924modelos1" />
-  <link rel="stylesheet" href="/css/feed-sugerido.css?v=20260926feed2" />
+  <link rel="stylesheet" href="/css/feed-sugerido.css?v=20260927feed3" />
 
   <main class="mia-chat mia-manual-claude" data-recolher-menu>
     <div id="chat-drawer-backdrop" class="mia-chat-drawer-backdrop" hidden aria-hidden="true"></div>
@@ -377,6 +377,20 @@
 
             <div id="feed-sugerido-links" class="feed-sug-links"></div>
 
+            <fieldset>
+              <legend>Como criar as matérias</legend>
+              <div class="feed-sug-modos">
+                <label class="feed-sug-modo">
+                  <input type="radio" name="feed-modo" value="automatico" checked />
+                  <span><strong>Automático</strong><small>Escreve uma matéria de cada vídeo encontrado</small></span>
+                </label>
+                <label class="feed-sug-modo">
+                  <input type="radio" name="feed-modo" value="escolher" />
+                  <span><strong>Escolher os vídeos</strong><small>Mostra os vídeos do feed e só escreve os que você marcar</small></span>
+                </label>
+              </div>
+            </fieldset>
+
             <div class="feed-sug-grid">
               <label>
                 <span>Vídeos por rede</span>
@@ -406,6 +420,10 @@
               <input id="feed-sugerido-web" type="checkbox" />
               <span>Pesquisar outras fontes para confirmar os fatos (mais lento)</span>
             </label>
+            <label class="feed-sug-check">
+              <input id="feed-sugerido-chatgpt" type="checkbox" />
+              <span>Gerar a capa com o ChatGPT, como no botão “Capa com IA” (alguns minutos por matéria)</span>
+            </label>
 
             <p id="feed-sugerido-resumo" class="feed-sug-muted"></p>
             <button type="submit" id="feed-sugerido-iniciar" class="feed-sug-primary">Buscar vídeos e criar matérias</button>
@@ -420,6 +438,10 @@
             <p id="feed-sugerido-job-msg" class="feed-sug-muted"></p>
             <div class="feed-sug-bar"><i id="feed-sugerido-job-bar"></i></div>
             <ul id="feed-sugerido-coleta" class="feed-sug-coleta"></ul>
+            <div id="feed-sugerido-escolha" class="feed-sug-escolha" hidden>
+              <label class="feed-sug-check"><input id="feed-sugerido-todos" type="checkbox" /><span>Marcar todos</span></label>
+              <button type="button" id="feed-sugerido-escrever" class="feed-sug-primary" disabled>Escrever matérias dos marcados</button>
+            </div>
             <ol id="feed-sugerido-itens" class="feed-sug-itens"></ol>
             <button type="button" id="feed-sugerido-nova" class="feed-sug-link" hidden>Nova coleta</button>
           </div>
@@ -539,5 +561,5 @@
   </script>
   <script src="/js/materia-chat.js?v=20260926capapub1"></script>
   <script src="/js/materia-chat-extras.js?v=20260915radarAmpliado1"></script>
-  <script src="/js/feed-sugerido.js?v=20260926feed2"></script>
+  <script src="/js/feed-sugerido.js?v=20260927feed3"></script>
 <%- include('partials/app-end') %>

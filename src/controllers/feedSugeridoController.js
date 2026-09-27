@@ -51,6 +51,19 @@ async function obter(req, res, next) {
   }
 }
 
+async function escolher(req, res, next) {
+  try {
+    const job = await feedSugeridoService.escolherItens(
+      req.session.userId,
+      Number(req.params.id),
+      req.body?.itens || []
+    );
+    res.json({ job });
+  } catch (err) {
+    responderErro(res, next, err);
+  }
+}
+
 async function cancelar(req, res, next) {
   try {
     res.json({ job: await feedSugeridoService.cancelarJob(req.session.userId, Number(req.params.id)) });
@@ -89,4 +102,4 @@ async function salvarAdmin(req, res, next) {
   }
 }
 
-module.exports = { config, listar, criar, obter, cancelar, paginaAdmin, salvarAdmin };
+module.exports = { config, listar, criar, obter, escolher, cancelar, paginaAdmin, salvarAdmin };

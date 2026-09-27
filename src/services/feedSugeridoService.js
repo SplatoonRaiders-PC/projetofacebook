@@ -1,5 +1,4 @@
 const db = require('../config/db');
-const { env } = require('../config/env');
 const { PLATAFORMAS, ROTULOS, lerConfig } = require('./feedSugeridoConfig');
 const { coletarSugeridos, pausaHumana } = require('./feedSugeridoColetor');
 
@@ -7,9 +6,16 @@ const { coletarSugeridos, pausaHumana } = require('./feedSugeridoColetor');
  * Feed sugerido → matérias.
  *
  * O editor escolhe as redes (entre as que o admin liberou) e quantos vídeos
- * quer de cada uma. O sistema abre o feed de sugestões da conta dos cookies,
- * pega os N primeiros vídeos que ainda não viraram matéria, transcreve o
- * áudio e escreve uma matéria-rascunho para a página do Facebook escolhida.
+ * quer de cada uma. O sistema abre o feed de sugestões da conta dos cookies
+ * e pega os N primeiros vídeos que ainda não viraram matéria.
+ *
+ * - modo "automatico": escreve uma matéria de cada vídeo coletado;
+ * - modo "escolher": mostra os vídeos e só escreve os que o editor marcar.
+ *
+ * Cada matéria passa pelo MESMO fluxo do "Criar matéria" do /materia-manual
+ * (transcrição, redator editorial, memória de estilo do editor, rodapé com a
+ * fonte), então sai com a mesma qualidade jornalística. Opcionalmente a capa
+ * é refeita com o ChatGPT, como no botão "Capa com IA".
  *
  * Um job por vez no servidor: transcrição é pesada e várias coletas em
  * paralelo com a mesma conta é o que faz Instagram/Facebook bloquearem.
@@ -17,8 +23,12 @@ const { coletarSugeridos, pausaHumana } = require('./feedSugeridoColetor');
 
 const JOBS = 'feed_sugerido_jobs';
 const ITENS = 'feed_sugerido_itens';
+/** Rodando ou esperando a fila: retomados após reinício do servidor. */
 const ATIVOS = ['na_fila', 'coletando', 'processando'];
+/** Impedem outra coleta do mesmo editor (inclui a espera pela escolha). */
+const EM_ABERTO = [...ATIVOS, 'aguardando_escolha'];
 const FINAIS_ITEM = ['pronto', 'ignorado', 'erro'];
+const LIMITE_IMAGEM_MS = 8 * 60 * 1000;
 
 const fila = [];
 let rodando = false;
@@ -56,6 +66,13 @@ async function jobCancelado(id) {
   return !job || job.status === 'cancelado';
 }
 
+async function encerrarItensAbertos(jobId, etapa) {
+  await db(ITENS)
+    .where({ job_id: jobId })
+    .whereNotIn('status', FINAIS_ITEM)
+    .update({ status: 'ignorado', etapa, updated_at: db.fn.now() });
+}
+
 // ------------------------------------------------------------------ criação
 
 async function criarJob(userId, entrada = {}) {
@@ -83,6 +100,12 @@ async function criarJob(userId, entrada = {}) {
     page = await defaultPageForUser(userId);
   }
 
+  // Uma lista esperando escolha não prende o editor: a nova coleta a substitui.
+  const esperando = await db(JOBS).where({ user_id: userId, status: 'aguardando_escolha' }).select('id');
+  for (const { id } of esperando) {
+    await atualizarJob(id, { status: 'cancelado', mensagem: 'Substituída por uma nova coleta.', finished_at: db.fn.now() });
+    await encerrarItensAbertos(id, 'Não escolhido');
+  }
   const ativo = await db(JOBS).where({ user_id: userId }).whereIn('status', ATIVOS).first('id');
   if (ativo) throw erro(409, 'Você já tem uma coleta em andamento. Aguarde terminar ou cancele.');
 
@@ -96,6 +119,9 @@ async function criarJob(userId, entrada = {}) {
     tema: corta(entrada.tema, 120) || config.temaPadrao || '',
     tom: corta(entrada.tom, 30) || 'natural',
     pesquisarWeb: Boolean(entrada.pesquisarWeb),
+    modo: entrada.modo === 'escolher' ? 'escolher' : 'automatico',
+    imagemChatgpt: Boolean(entrada.imagemChatgpt),
+    escolhaFeita: false,
   };
 
   const [id] = await db(JOBS).insert({
@@ -109,6 +135,36 @@ async function criarJob(userId, entrada = {}) {
   });
   enfileirar(id);
   return obterJob(userId, id);
+}
+
+/** Modo "escolher": o editor marcou quais vídeos viram matéria. */
+async function escolherItens(userId, jobId, itemIds = []) {
+  const job = await db(JOBS).where({ id: jobId, user_id: userId }).first();
+  if (!job) throw erro(404, 'Coleta não encontrada.');
+  if (job.status !== 'aguardando_escolha') throw erro(409, 'Esta coleta não está esperando escolha.');
+  const ids = [...new Set((Array.isArray(itemIds) ? itemIds : []).map(Number).filter(Boolean))];
+  if (!ids.length) throw erro(400, 'Marque pelo menos um vídeo.');
+
+  const escolhidos = await db(ITENS)
+    .where({ job_id: jobId, status: 'pendente' })
+    .whereIn('id', ids)
+    .select('id');
+  if (!escolhidos.length) throw erro(400, 'Os vídeos marcados não pertencem a esta coleta.');
+
+  await db(ITENS)
+    .where({ job_id: jobId, status: 'pendente' })
+    .whereNotIn('id', escolhidos.map((i) => i.id))
+    .update({ status: 'ignorado', etapa: 'Não escolhido', updated_at: db.fn.now() });
+
+  const opcoes = { ...parseJson(job.opcoes, {}), escolhaFeita: true };
+  await atualizarJob(jobId, {
+    status: 'na_fila',
+    opcoes: JSON.stringify(opcoes),
+    total: escolhidos.length,
+    mensagem: `${escolhidos.length} vídeo(s) escolhido(s). Na fila para escrever…`,
+  });
+  enfileirar(jobId);
+  return obterJob(userId, jobId);
 }
 
 // --------------------------------------------------------------- consultas
@@ -165,12 +221,9 @@ async function listarJobs(userId, limite = 8) {
 async function cancelarJob(userId, id) {
   const job = await db(JOBS).where({ id, user_id: userId }).first();
   if (!job) throw erro(404, 'Coleta não encontrada.');
-  if (!ATIVOS.includes(job.status)) return obterJob(userId, id);
+  if (!EM_ABERTO.includes(job.status)) return obterJob(userId, id);
   await atualizarJob(id, { status: 'cancelado', mensagem: 'Cancelado pelo editor.', finished_at: db.fn.now() });
-  await db(ITENS)
-    .where({ job_id: id })
-    .whereNotIn('status', FINAIS_ITEM)
-    .update({ status: 'ignorado', etapa: 'Cancelado', updated_at: db.fn.now() });
+  await encerrarItensAbertos(id, 'Cancelado');
   const idx = fila.indexOf(Number(id));
   if (idx >= 0) fila.splice(idx, 1);
   return obterJob(userId, id);
@@ -206,7 +259,7 @@ async function drenarFila() {
   }
 }
 
-/** Externos que este usuário já transformou em matéria (não repete o vídeo). */
+/** Externos que este usuário já transformou (ou vai transformar) em matéria. */
 async function jaAproveitados(userId, plataforma) {
   const linhas = await db(ITENS)
     .where({ user_id: userId, plataforma })
@@ -230,11 +283,12 @@ async function coletar(job, opcoes) {
       seedUrl: opcoes.seeds?.[rede] || '',
       tema: opcoes.tema || '',
     });
-    const novos = resultado.itens.filter((item) => !usados.has(String(item.externalId))).slice(0, job.quantidade);
+    const ineditos = resultado.itens.filter((item) => !usados.has(String(item.externalId)));
+    const novos = ineditos.slice(0, job.quantidade);
     coleta[rede] = {
       encontrados: resultado.itens.length,
       novos: novos.length,
-      repetidos: resultado.itens.length - resultado.itens.filter((i) => !usados.has(String(i.externalId))).length,
+      repetidos: resultado.itens.length - ineditos.length,
       origem: resultado.origem,
       motivo: resultado.motivo,
       // Últimos passos (só caminho e status HTTP) para diagnosticar bloqueios.
@@ -256,19 +310,14 @@ async function coletar(job, opcoes) {
           autor: corta(item.autor, 160),
           thumbnail: item.thumbnail || null,
           status: 'pendente',
-          // Legenda e mídia direta ficam só na memória do job (URLs de CDN expiram).
           etapa: null,
         }))
       );
-      for (const item of novos) extrasDoItem.set(`${job.id}:${rede}:${item.externalId}`, item);
     }
     total += novos.length;
   }
   await atualizarJob(job.id, { coleta: JSON.stringify(coleta), total });
 }
-
-/** Legenda e URL de mídia vindas da coleta (não vão para o banco). */
-const extrasDoItem = new Map();
 
 async function executarJob(id) {
   let job = await db(JOBS).where({ id }).first();
@@ -283,7 +332,6 @@ async function executarJob(id) {
     if (!job || job.status === 'cancelado') return;
   }
 
-  const pendentes = await db(ITENS).where({ job_id: id, status: 'pendente' }).orderBy('id', 'asc');
   const totalGeral = await db(ITENS).where({ job_id: id }).count({ n: '*' }).first();
   if (!Number(totalGeral?.n)) {
     const coleta = parseJson(job.coleta, {});
@@ -298,6 +346,16 @@ async function executarJob(id) {
     return;
   }
 
+  // Modo "escolher": para aqui até o editor marcar os vídeos no painel.
+  if (opcoes.modo === 'escolher' && !opcoes.escolhaFeita) {
+    await atualizarJob(id, {
+      status: 'aguardando_escolha',
+      mensagem: 'Escolha quais vídeos devem virar matéria.',
+    });
+    return;
+  }
+
+  const pendentes = await db(ITENS).where({ job_id: id, status: 'pendente' }).orderBy('id', 'asc');
   await atualizarJob(id, { status: 'processando' });
   for (let i = 0; i < pendentes.length; i += 1) {
     if (await jobCancelado(id)) return;
@@ -305,11 +363,9 @@ async function executarJob(id) {
     await atualizarJob(id, {
       mensagem: `Vídeo ${i + 1} de ${pendentes.length} (${ROTULOS[item.plataforma]})…`,
     });
-    const extra = extrasDoItem.get(`${id}:${item.plataforma}:${item.external_id}`) || {};
-    extrasDoItem.delete(`${id}:${item.plataforma}:${item.external_id}`);
     let ok = false;
     try {
-      ok = await processarItem(job, opcoes, item, extra);
+      ok = await processarItem(job, opcoes, item);
     } catch (err) {
       console.warn(`[feed-sugerido] item ${item.id} (${item.url}):`, err.message);
       await atualizarItem(item.id, { status: 'erro', etapa: null, erro: corta(err.message, 500) });
@@ -336,109 +392,188 @@ function rotuloDoVideo(plataforma) {
   return 'vídeo do Facebook';
 }
 
-/** @returns {Promise<boolean>} true quando a matéria foi criada. */
-async function processarItem(job, opcoes, item, extra) {
-  let legenda = String(extra.legenda || '').trim();
-  let thumbnail = item.thumbnail || extra.thumbnail || null;
-  let autor = item.autor || extra.autor || null;
-  let mediaUrl = extra.mediaUrl || null;
-  let subtitleUrl = null;
+/** Pedido enviado ao mesmo redator do "Criar matéria". */
+function pedidoDaMateria(item) {
+  const rede = ROTULOS[item.plataforma];
+  return [
+    item.url,
+    '',
+    `Escreva uma matéria jornalística a partir do que é dito neste ${rotuloDoVideo(item.plataforma)}.`,
+    'Abra com o fato principal no lead (quem, o quê, quando, onde), em terceira pessoa e em tom de notícia.',
+    'Atribua cada fala a quem a disse, com citações diretas entre aspas quando houver.',
+    `Cite a origem uma vez (por exemplo, "em vídeo publicado no ${rede}"), mas não transforme o texto em descrição do vídeo: evite "no vídeo", "a gravação mostra", "o conteúdo apresenta".`,
+    'Use somente fatos da transcrição e da legenda; não invente nomes, datas, números nem contexto.',
+  ].join('\n');
+}
 
-  // 1) Legenda/capa do post (Instagram e Facebook) quando a coleta não trouxe.
-  if (item.plataforma !== 'youtube' && (!legenda || !thumbnail)) {
-    await atualizarItem(item.id, { status: 'lendo', etapa: 'Lendo a publicação…' });
-    try {
-      const { extrairPostSocial } = require('./socialPostExtract');
-      const post = await extrairPostSocial(item.url);
-      if (!legenda && post?.texto) legenda = String(post.texto).trim();
-      if (!thumbnail && post?.imagem) thumbnail = post.imagem;
-      if (!autor && post?.veiculo) autor = post.veiculo;
-      if (!mediaUrl && post?.videoUrl) mediaUrl = post.videoUrl;
-      if (post?.subtitleUrl) subtitleUrl = post.subtitleUrl;
-    } catch (err) {
-      console.info(`[feed-sugerido] sem dados do post ${item.url}: ${err.message}`);
-    }
-  }
+/** Mesmo pedido de capa do botão "Capa com IA" do /materia-manual. */
+function promptCapaIa(titulo) {
+  return [
+    'Crie uma NOVA imagem editorial fotorrealista inspirada na imagem de referência enviada.',
+    'Mantenha o assunto, as pessoas e a atmosfera reconhecíveis, mas reconstrua a cena de forma original e natural.',
+    'Não inclua texto, letras, legendas, placas legíveis, logotipos, marcas d’água, molduras ou elementos gráficos.',
+    'Composição vertical exata 4:5 (1080 × 1350 pixels), em alta qualidade, adequada como imagem destacada de uma notícia no feed do Facebook. Não gere imagem quadrada ou horizontal.',
+    `Contexto da matéria: ${String(titulo || '').replace(/\[\[|\]\]|\*\*/g, '').trim()}`,
+  ].join('\n\n');
+}
 
-  // 2) Fala do vídeo: legenda da plataforma ou, sem ela, só o áudio no Whisper.
-  await atualizarItem(item.id, {
-    status: 'transcrevendo',
-    etapa: 'Transcrevendo o áudio…',
-    thumbnail: thumbnail || null,
-    autor: corta(autor, 160),
+function comLimite(promise, ms, mensagem) {
+  let timer;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(mensagem)), ms);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
+/** Refaz a capa com o ChatGPT a partir da foto da matéria. */
+async function aplicarCapaChatgpt({ userId, matterId, thumbnail }) {
+  const AiMatters = require('../models/AiMatters');
+  const matter = await AiMatters.findById(matterId);
+  if (!matter) throw new Error('matéria não encontrada');
+  let fonte = String(matter.imagem_fonte_url || '').trim();
+  if (!fonte || /\/media\/artes\//i.test(fonte)) fonte = thumbnail && /^https?:\/\//i.test(thumbnail) ? thumbnail : '';
+  if (!fonte) throw new Error('não há foto de referência para o ChatGPT');
+
+  const chatgptImageService = require('./chatgptImageService');
+  const { storeMatterSourceImage, composeMatterArtwork } = require('./matterArtworkService');
+  const gerada = await comLimite(
+    chatgptImageService.gerarImagem({
+      sourceUrl: fonte,
+      prompt: promptCapaIa(matter.titulo),
+      titulo: matter.titulo || '',
+      materia: matter.materia || '',
+      recoveryKey: `${userId}:${matterId}`,
+      modo: 'referencia',
+    }),
+    LIMITE_IMAGEM_MS,
+    'o ChatGPT demorou mais de 8 min'
+  );
+  const guardada = await storeMatterSourceImage({ userId, matterId, buffer: gerada.buffer });
+  await composeMatterArtwork({
+    userId,
+    matterId,
+    sourceUrl: guardada.publicUrl,
+    title: matter.titulo,
+    force: true,
   });
-  let transcricao = '';
-  try {
-    const { transcribeUrl, comLimiteDeTempo } = require('./transcriptionService');
-    const resultado = await comLimiteDeTempo(
-      transcribeUrl({
-        sourceUrl: item.url,
-        mediaUrl,
-        subtitleUrl,
-        contextText: legenda.slice(0, 400),
-        preferSubtitles: true,
-        allowAudioFallback: true,
-        preferAccuracy: item.plataforma !== 'youtube',
-      }),
-      env.transcricao.totalChatMs,
-      'A transcrição deste vídeo demorou demais.'
-    );
-    transcricao = String(resultado?.text || '').trim();
-  } catch (err) {
-    console.info(`[feed-sugerido] transcrição falhou ${item.url}: ${err.message}`);
-    if (legenda.length < 80) throw new Error(`Não consegui ouvir o vídeo: ${err.message}`);
+
+  // Crédito honesto: a foto agora é ilustração gerada por IA.
+  const trocarCredito = (texto) =>
+    String(texto || '')
+      .replace(/\(Foto:[^)\n]*\)/gi, '(Foto: Imagem gerada por IA)')
+      .replace(/(\*\*Foto:\*\*)[^\n]*/gi, '$1 Imagem gerada por IA');
+  const patch = {};
+  if (matter.materia) patch.materia = trocarCredito(matter.materia);
+  if (matter.fonte_credito) patch.fonte_credito = trocarCredito(matter.fonte_credito);
+  if (Object.keys(patch).length) await AiMatters.update(matterId, patch);
+}
+
+/** @returns {Promise<boolean>} true quando a matéria foi criada. */
+async function processarItem(job, opcoes, item) {
+  const chatService = require('./materiaChatService');
+  const { comModelo } = require('./tokenFreeGatewayService');
+  const deepseekService = require('./deepseekService');
+
+  await atualizarItem(item.id, { status: 'transcrevendo', etapa: 'Lendo o vídeo e transcrevendo…', erro: null });
+
+  // O mesmo modelo padrão do "Criar matéria" (liberado pelo admin em /claude).
+  let modelo = null;
+  if (deepseekService.usarTokenFree('conversa')) {
+    modelo = await require('./materiaModelosService').resolverModelo(null);
   }
 
-  if (transcricao.length < 60 && legenda.length < 80) {
+  let ultimaEtapa = 0;
+  let chatId = null;
+  const onEvent = (evento) => {
+    if (evento?.tipo === 'conversa' && evento.chat?.id) chatId = evento.chat.id;
+    // Mostra no painel o passo atual do chat (transcrição, escrita…).
+    if (evento?.tipo !== 'passo' || !evento.passo?.texto) return;
+    if (Date.now() - ultimaEtapa < 1500) return;
+    ultimaEtapa = Date.now();
+    const escrevendo = /escrev|redig|revis/i.test(evento.passo.texto);
+    atualizarItem(item.id, {
+      status: escrevendo ? 'escrevendo' : 'transcrevendo',
+      etapa: corta(evento.passo.texto, 255),
+    }).catch(() => {});
+  };
+
+  // Só as conversas que viraram matéria ficam no histórico do chat.
+  const descartarConversa = () =>
+    chatId
+      ? chatService.excluirConversa({ userId: job.user_id, chatId }).catch(() => {})
+      : Promise.resolve();
+
+  let resposta;
+  try {
+    resposta = await comModelo(modelo, () => chatService.responder({
+      userId: job.user_id,
+      texto: pedidoDaMateria(item),
+      pesquisarWeb: Boolean(opcoes.pesquisarWeb),
+      tom: opcoes.tom || 'natural',
+      modo: 'escrever',
+      tipoConversa: 'materia',
+      transcreverVideo: true,
+      onEvent,
+    }));
+  } catch (err) {
+    await descartarConversa();
+    throw err;
+  }
+
+  const mensagem = resposta?.mensagem;
+  if (!mensagem?.id || !mensagem.ehMateria) {
+    await descartarConversa();
+    const trecho = String(mensagem?.conteudo || mensagem?.content || '').replace(/\s+/g, ' ').trim().slice(0, 220);
     await atualizarItem(item.id, {
       status: 'ignorado',
       etapa: null,
-      erro: 'O vídeo não tem fala nem legenda suficientes para uma matéria.',
+      erro: corta(`A IA não escreveu matéria deste vídeo${trecho ? `: ${trecho}` : '.'}`, 500),
     });
     return false;
   }
 
-  // 3) Matéria-rascunho com capa, ligada à página escolhida.
-  await atualizarItem(item.id, { status: 'escrevendo', etapa: 'Escrevendo a matéria…' });
-  const rotulo = rotuloDoVideo(item.plataforma);
-  const perfil = autor ? `${String(autor).startsWith('@') || /\s/.test(autor) ? autor : `@${autor}`}` : null;
-  const informacoes = [
-    `Fonte: ${rotulo}${perfil ? ` publicado por ${perfil}` : ''}.`,
-    `Link do vídeo: ${item.url}`,
-    item.titulo ? `Título do vídeo: ${item.titulo}` : null,
-    legenda ? `Legenda da publicação:\n${legenda.slice(0, 3000)}` : null,
-    transcricao ? `Transcrição do áudio do vídeo:\n${transcricao.slice(0, 9000)}` : null,
-  ]
-    .filter(Boolean)
-    .join('\n\n');
-
-  const { gerarMateriaManual } = require('./materiaIaService');
-  const resultado = await gerarMateriaManual({
+  await atualizarItem(item.id, { status: 'escrevendo', etapa: 'Salvando o rascunho e montando a arte…' });
+  const salvo = await chatService.salvarMateriaDoChat({
     userId: job.user_id,
-    informacoes,
-    angulo:
-      'Matéria jornalística a partir do que é dito no vídeo. Use só os fatos da transcrição e da legenda; não invente nomes, números ou datas.',
-    tom: opcoes.tom || 'natural',
+    messageId: mensagem.id,
     facebookPageId: job.facebook_page_id || null,
-    imagemUrl: thumbnail && /^https?:\/\//i.test(thumbnail) ? thumbnail : null,
-    creditoImagem: `Reprodução/${ROTULOS[item.plataforma]}${perfil ? ` ${perfil}` : ''}`,
-    pesquisarWeb: Boolean(opcoes.pesquisarWeb),
-    palavrasChave: opcoes.tema || null,
-    fonteBase: {
-      veiculo: `${ROTULOS[item.plataforma]}${perfil ? ` (${perfil})` : ''}`,
-      titulo: item.titulo || legenda.split('\n')[0]?.slice(0, 200) || rotulo,
-      url: item.url,
-      resumo: (legenda || transcricao).slice(0, 2000),
-    },
+    imagemUrl: item.thumbnail && /^https?:\/\//i.test(item.thumbnail) ? item.thumbnail : null,
   });
+  const matterId = salvo?.matterId || null;
 
-  const matterId = resultado?.matter?.id || null;
+  // A conversa fica no chat para o editor pedir ajustes, com nome reconhecível.
+  const AiMatters = require('../models/AiMatters');
+  const matter = matterId ? await AiMatters.findById(matterId) : null;
+  try {
+    const tituloLimpo = String(matter?.titulo || item.titulo || '').replace(/\[\[|\]\]|\*\*/g, '').trim();
+    await chatService.renomearConversa({
+      userId: job.user_id,
+      chatId: resposta.chatId,
+      titulo: `Feed ${ROTULOS[item.plataforma]} · ${tituloLimpo}`.slice(0, 180),
+    });
+  } catch {
+    // nome da conversa é só conveniência
+  }
+
+  let aviso = null;
+  if (matterId && opcoes.imagemChatgpt) {
+    await atualizarItem(item.id, { status: 'escrevendo', etapa: 'Gerando a capa com o ChatGPT…', matter_id: matterId });
+    try {
+      await aplicarCapaChatgpt({ userId: job.user_id, matterId, thumbnail: item.thumbnail });
+    } catch (err) {
+      console.warn(`[feed-sugerido] capa ChatGPT matéria ${matterId}:`, err.message);
+      aviso = `Matéria criada com a foto original; a capa do ChatGPT falhou: ${err.message}`;
+    }
+  }
+
   await atualizarItem(item.id, {
     status: 'pronto',
     etapa: null,
-    erro: null,
+    erro: corta(aviso, 500),
     matter_id: matterId,
-    titulo: corta(item.titulo || resultado?.matter?.titulo, 500),
+    titulo: corta(item.titulo || matter?.titulo, 500),
   });
   return Boolean(matterId);
 }
@@ -467,6 +602,7 @@ async function retomarAposReinicio() {
 
 module.exports = {
   criarJob,
+  escolherItens,
   obterJob,
   listarJobs,
   cancelarJob,

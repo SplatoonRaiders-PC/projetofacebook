@@ -24,6 +24,7 @@
     na_fila: 'Na fila',
     coletando: 'Abrindo as sugestões…',
     processando: 'Criando matérias…',
+    aguardando_escolha: 'Escolha os vídeos',
     concluido: 'Concluído',
     erro: 'Não concluído',
     cancelado: 'Cancelado',
@@ -66,6 +67,10 @@
     return (config?.plataformas || []).filter((p) => p.habilitada);
   }
 
+  function modoEscolhido() {
+    return (form.querySelector('input[name="feed-modo"]:checked') || {}).value || 'automatico';
+  }
+
   function redesMarcadas() {
     return [...redesEl.querySelectorAll('input[name="feed-rede"]:checked')].map((el) => el.value);
   }
@@ -74,7 +79,9 @@
     const marcadas = redesMarcadas();
     const qtd = Math.max(1, Number(qtdEl.value) || 1);
     resumoEl.textContent = marcadas.length
-      ? `Até ${qtd * marcadas.length} matéria(s): ${qtd} de cada rede marcada. Vídeos que já viraram matéria são pulados.`
+      ? (modoEscolhido() === 'escolher'
+        ? `Vai mostrar até ${qtd * marcadas.length} vídeo(s) (${qtd} de cada rede) para você escolher. Vídeos que já viraram matéria são pulados.`
+        : `Até ${qtd * marcadas.length} matéria(s): ${qtd} de cada rede marcada. Vídeos que já viraram matéria são pulados.`)
       : 'Marque pelo menos uma rede.';
     // Um campo de link por rede marcada (ponto de partida opcional).
     const atuais = {};
@@ -122,19 +129,32 @@
     }
   }
 
+  function atualizarBotaoEscrever() {
+    const marcados = document.querySelectorAll('#feed-sugerido-itens input[data-item]:checked').length;
+    const btn = $('feed-sugerido-escrever');
+    btn.disabled = !marcados;
+    btn.textContent = marcados ? `Escrever ${marcados} matéria(s)` : 'Marque os vídeos que viram matéria';
+  }
+
   function renderJob(job) {
     jobAtual = job;
     const ativo = ATIVOS.includes(job.status);
-    form.hidden = ativo || job.status === 'concluido';
+    const escolhendo = job.status === 'aguardando_escolha';
+    form.hidden = ativo || escolhendo || job.status === 'concluido';
     jobEl.hidden = false;
     $('feed-sugerido-job-status').textContent = STATUS_JOB[job.status] || job.status;
     $('feed-sugerido-job-msg').textContent = job.mensagem || '';
-    $('feed-sugerido-cancelar').hidden = !ativo;
-    $('feed-sugerido-nova').hidden = ativo;
+    $('feed-sugerido-cancelar').hidden = !(ativo || escolhendo);
+    $('feed-sugerido-nova').hidden = ativo || escolhendo;
+    $('feed-sugerido-escolha').hidden = !escolhendo;
+    // Mantém as marcações do editor quando o painel é redesenhado.
+    const marcadosAntes = new Set(
+      [...document.querySelectorAll('#feed-sugerido-itens input[data-item]:checked')].map((el) => el.dataset.item)
+    );
 
     const feitos = (job.concluidos || 0) + (job.falhas || 0);
     const pct = job.total ? Math.round((feitos / job.total) * 100) : job.status === 'coletando' ? 8 : 0;
-    $('feed-sugerido-job-bar').style.width = `${ativo ? Math.max(pct, 4) : 100}%`;
+    $('feed-sugerido-job-bar').style.width = `${ativo ? Math.max(pct, 4) : escolhendo ? 0 : 100}%`;
 
     const nomes = Object.fromEntries((config?.plataformas || []).map((p) => [p.id, p.nome]));
     $('feed-sugerido-coleta').innerHTML = Object.entries(job.coleta || {})
@@ -162,13 +182,21 @@
         const badge = item.matter_id
           ? `<a class="feed-sug-badge ${classe}" href="/materias-ia/${esc(item.matter_id)}" target="_blank" rel="noopener">Abrir matéria</a>`
           : `<span class="feed-sug-badge ${classe}">${esc(rotulo)}</span>`;
-        return `<li class="feed-sug-item">${thumb}
+        const podeEscolher = escolhendo && item.status === 'pendente';
+        const caixa = podeEscolher
+          ? `<input type="checkbox" class="feed-sug-escolher" data-item="${esc(item.id)}" ${marcadosAntes.has(String(item.id)) ? 'checked' : ''} aria-label="Escrever matéria deste vídeo" />`
+          : '';
+        const selo = podeEscolher
+          ? `<a class="feed-sug-badge" href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">Ver vídeo</a>`
+          : badge;
+        return `<li class="feed-sug-item${podeEscolher ? ' is-escolha' : ''}">${caixa}${thumb}
           <div class="feed-sug-item-body">
             <p title="${esc(titulo)}">${esc(titulo)}</p>
             <small title="${esc(detalhe)}"><a href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">vídeo</a> · ${esc(detalhe)}</small>
-          </div>${badge}</li>`;
+          </div>${selo}</li>`;
       })
       .join('');
+    if (escolhendo) atualizarBotaoEscrever();
 
     clearTimeout(timer);
     if (ativo) timer = setTimeout(() => acompanhar(job.id), 4000);
@@ -215,7 +243,7 @@
     erroEl.textContent = '';
     carregarPaginas();
     carregarHistorico().then((jobs) => {
-      const ativo = jobs.find((j) => ATIVOS.includes(j.status));
+      const ativo = jobs.find((j) => ATIVOS.includes(j.status) || j.status === 'aguardando_escolha');
       if (ativo) acompanhar(ativo.id);
       else if (jobAtual) acompanhar(jobAtual.id);
     });
@@ -244,6 +272,8 @@
           tema: temaEl.value,
           tom: tomEl.value,
           pesquisarWeb: webEl.checked,
+          modo: modoEscolhido(),
+          imagemChatgpt: $('feed-sugerido-chatgpt').checked,
           links,
         }),
       });
@@ -256,6 +286,38 @@
   });
 
   redesEl.addEventListener('change', atualizarResumo);
+  form.addEventListener('change', (e) => {
+    if (e.target?.name === 'feed-modo') atualizarResumo();
+  });
+
+  $('feed-sugerido-itens').addEventListener('change', (e) => {
+    if (!e.target.matches('input[data-item]')) return;
+    const todas = [...document.querySelectorAll('#feed-sugerido-itens input[data-item]')];
+    $('feed-sugerido-todos').checked = todas.length > 0 && todas.every((el) => el.checked);
+    atualizarBotaoEscrever();
+  });
+  $('feed-sugerido-todos').addEventListener('change', (e) => {
+    document.querySelectorAll('#feed-sugerido-itens input[data-item]').forEach((el) => { el.checked = e.target.checked; });
+    atualizarBotaoEscrever();
+  });
+  $('feed-sugerido-escrever').addEventListener('click', async () => {
+    if (!jobAtual) return;
+    const itens = [...document.querySelectorAll('#feed-sugerido-itens input[data-item]:checked')].map((el) => Number(el.dataset.item));
+    if (!itens.length) return;
+    const btn = $('feed-sugerido-escrever');
+    btn.disabled = true;
+    try {
+      const { job } = await api(`/api/feed-sugerido/jobs/${jobAtual.id}/escolher`, {
+        method: 'POST',
+        body: JSON.stringify({ itens }),
+      });
+      $('feed-sugerido-todos').checked = false;
+      renderJob(job);
+    } catch (err) {
+      $('feed-sugerido-job-msg').textContent = err.message;
+      btn.disabled = false;
+    }
+  });
   qtdEl.addEventListener('input', atualizarResumo);
 
   $('feed-sugerido-cancelar').addEventListener('click', async () => {
