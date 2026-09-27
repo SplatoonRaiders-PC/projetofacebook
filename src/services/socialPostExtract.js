@@ -2,7 +2,7 @@ const axios = require('axios');
 const { env } = require('../config/env');
 
 const BROWSER_UA =
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+  (process.env.SOCIAL_USER_AGENT || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36');
 const CRAWLER_UA = 'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)';
 
 /** Remove redirect de login e normaliza URL de foto/post do Facebook / Instagram. */
@@ -743,9 +743,13 @@ async function extrairViaInstagramApi(url) {
     `https://www.instagram.com/reel/${code}/?__a=1&__d=dis`,
   ].filter(Boolean);
 
+  // Variante do app Android só com INSTAGRAM_API_MOBILE=1: a mesma sessão em
+  // navegador e celular faz o Instagram bloquear a conta.
   const headerVariants = [
     instagramApiHeaders(cookieHeader, { mobile: false, wwwClaim }),
-    instagramApiHeaders(cookieHeader, { mobile: true, wwwClaim }),
+    ...(require('./instagramCookies').instagramMobileLiberado()
+      ? [instagramApiHeaders(cookieHeader, { mobile: true, wwwClaim })]
+      : []),
   ];
 
   for (const headers of headerVariants) {

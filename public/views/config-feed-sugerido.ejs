@@ -1,0 +1,102 @@
+<%- include('partials/app-start') %>
+
+<main class="mx-auto max-w-4xl px-4 py-5 sm:px-6 sm:py-8">
+  <div class="flex flex-wrap items-start justify-between gap-4">
+    <div>
+      <p class="text-xs font-semibold uppercase tracking-wider text-emerald-400">Administração</p>
+      <h1 class="mt-1 text-2xl font-semibold text-white">Feed sugerido</h1>
+      <p class="mt-2 max-w-3xl text-sm leading-relaxed text-slate-400">
+        Escolha quais redes os editores podem usar em <strong class="font-medium text-slate-200">Criar matéria → Vídeos sugeridos</strong>.
+        O sistema abre as sugestões da conta dos cookies salvos (Reels, Shorts e vídeos), transcreve o áudio de cada vídeo
+        e cria uma matéria-rascunho para a página do Facebook escolhida.
+      </p>
+    </div>
+    <a href="/materia-manual" class="rounded-lg border border-slate-700 px-4 py-2 text-sm text-slate-300 hover:border-emerald-500 hover:text-emerald-300">Abrir Criar matéria</a>
+  </div>
+
+  <div id="feed-alerta" class="mt-5 hidden rounded-xl border px-4 py-3 text-sm"></div>
+
+  <form id="feed-config-form" class="mt-6 space-y-5">
+    <section class="rounded-2xl border border-slate-800 bg-slate-900/60 p-5">
+      <h2 class="text-base font-semibold text-white">Redes liberadas</h2>
+      <p class="mt-1 text-xs text-slate-500">Desligada, a rede some das opções do editor. Cookies são cadastrados no servidor (Instagram/Facebook) e em Cookies YouTube.</p>
+      <div class="mt-4 space-y-3">
+        <% plataformas.forEach(function (rede) { const ck = cookies[rede] || {}; %>
+          <label class="flex cursor-pointer items-start justify-between gap-4 rounded-xl border border-slate-800 bg-slate-950/60 px-4 py-3 hover:border-slate-700">
+            <span class="min-w-0">
+              <span class="block text-sm font-medium text-white"><%= rotulos[rede] %></span>
+              <span class="mt-1 flex items-center gap-2 text-xs <%= ck.ok ? 'text-emerald-400' : 'text-amber-400' %>">
+                <span class="inline-block h-2 w-2 rounded-full <%= ck.ok ? 'bg-emerald-400' : 'bg-amber-400' %>"></span>
+                <%= ck.ok ? 'Cookies encontrados' : 'Cookies com problema' %>
+                <span class="text-slate-500">· <%= ck.motivo || '' %></span>
+              </span>
+            </span>
+            <input type="checkbox" name="plataforma" value="<%= rede %>" <%= config.plataformas[rede] ? 'checked' : '' %>
+              class="mt-1 h-5 w-5 shrink-0 accent-emerald-500" />
+          </label>
+        <% }); %>
+      </div>
+    </section>
+
+    <section class="rounded-2xl border border-slate-800 bg-slate-900/60 p-5">
+      <h2 class="text-base font-semibold text-white">Limites</h2>
+      <div class="mt-4 grid gap-4 sm:grid-cols-2">
+        <label class="block">
+          <span class="text-xs font-medium text-slate-300">Máximo de vídeos por rede, por coleta</span>
+          <input id="feed-max" type="number" min="1" max="30" value="<%= config.maxPorRede %>"
+            class="mt-1.5 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm text-white outline-none focus:border-emerald-500" />
+          <span class="mt-1 block text-[11px] text-slate-500">Cada vídeo vira uma matéria. Transcrever leva de 30 s a alguns minutos por vídeo.</span>
+        </label>
+        <label class="block">
+          <span class="text-xs font-medium text-slate-300">Tema padrão <span class="font-normal text-slate-500">(opcional)</span></span>
+          <input id="feed-tema" maxlength="120" value="<%= config.temaPadrao %>" placeholder="Ex.: gospel, política"
+            class="mt-1.5 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm text-white outline-none focus:border-emerald-500" />
+          <span class="mt-1 block text-[11px] text-slate-500">Usado no YouTube quando a conta ainda não tem Shorts sugeridos na página inicial.</span>
+        </label>
+      </div>
+    </section>
+
+    <div class="flex justify-end">
+      <button type="submit" class="rounded-lg bg-emerald-500 px-5 py-2.5 text-sm font-semibold text-slate-950 hover:bg-emerald-400">Salvar configurações</button>
+    </div>
+  </form>
+</main>
+
+<script>
+  (function () {
+    const form = document.getElementById('feed-config-form');
+    const alerta = document.getElementById('feed-alerta');
+    function mostrar(texto, ok) {
+      alerta.textContent = texto;
+      alerta.className = 'mt-5 rounded-xl border px-4 py-3 text-sm ' +
+        (ok ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300' : 'border-rose-500/40 bg-rose-500/10 text-rose-300');
+    }
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const plataformas = {};
+      form.querySelectorAll('input[name="plataforma"]').forEach((el) => { plataformas[el.value] = el.checked; });
+      const btn = form.querySelector('button[type="submit"]');
+      btn.disabled = true;
+      try {
+        const res = await fetch('/api/admin/feed-sugerido/config', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify({
+            plataformas,
+            maxPorRede: Number(document.getElementById('feed-max').value) || 10,
+            temaPadrao: document.getElementById('feed-tema').value,
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || 'Não foi possível salvar.');
+        document.getElementById('feed-max').value = data.config.maxPorRede;
+        mostrar('Configurações salvas.', true);
+      } catch (err) {
+        mostrar(err.message, false);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  })();
+</script>
+<%- include('partials/app-end') %>

@@ -126,6 +126,7 @@ app.use('/api/virais', requireAuth, require('./routes/virais'));
 app.use('/api/biblioteca', requireAuth, require('./routes/biblioteca'));
 app.use('/api/youtube-cookies', requireAuth, require('./routes/ytCookies'));
 app.use('/api/pauta-fontes', requireAuth, require('./routes/pautaFontes'));
+app.use('/api/feed-sugerido', requireAuth, require('./routes/feedSugerido'));
 app.use('/api/midias', require('./routes/midias'));
 
 app.use((req, res) => {

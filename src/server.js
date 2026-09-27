@@ -12,6 +12,35 @@ for (const dir of storageDirs) {
   fs.mkdirSync(dir, { recursive: true });
 }
 
+// Testar os cookies do Facebook/Instagram faz um acesso logado. Fazer isso a
+// cada boot (inclusive em loop de reinício) mandava centenas de logins do IP
+// do servidor e a Meta bloqueava a conta ("várias sessões"). Agora o teste
+// roda no máximo a cada SOCIAL_VALIDACAO_HORAS (padrão 12 h), entre reinícios.
+const VALIDACAO_SOCIAL_ARQUIVO = path.join(env.storagePath, 'tmp', 'validacao-social.json');
+function validacaoSocialLiberada(rede) {
+  const horas = Number(process.env.SOCIAL_VALIDACAO_HORAS ?? 12);
+  if (!(horas > 0)) return false; // 0 desliga o teste no boot
+  let registro = {};
+  try {
+    registro = JSON.parse(fs.readFileSync(VALIDACAO_SOCIAL_ARQUIVO, 'utf8')) || {};
+  } catch {
+    registro = {};
+  }
+  const ultima = Number(registro[rede]) || 0;
+  const passou = Date.now() - ultima;
+  if (passou < horas * 60 * 60 * 1000) {
+    console.log(`[${rede === 'facebook' ? 'fb' : 'ig'}-session] teste pulado (último há ${Math.round(passou / 60000)} min; limite ${horas} h)`);
+    return false;
+  }
+  registro[rede] = Date.now();
+  try {
+    fs.writeFileSync(VALIDACAO_SOCIAL_ARQUIVO, JSON.stringify(registro));
+  } catch {
+    /* sem gravação: testa só desta vez */
+  }
+  return true;
+}
+
 app.listen(env.port, async () => {
   console.log(`ViralizeAI rodando em http://localhost:${env.port}`);
   try {
@@ -24,7 +53,7 @@ app.listen(env.port, async () => {
       `[ig-cookies] ${ig.ok ? 'FORMATO OK' : 'FALHA'} — ${ig.reason}` +
         (ig.file ? ` (${ig.file}, ${ig.size || 0}b, tabs=${ig.hasTabs})` : '')
     );
-    if (ig.ok) {
+    if (ig.ok && validacaoSocialLiberada('instagram')) {
       const axios = require('axios');
       const remote = await validateInstagramSession(axios);
       console.log(
@@ -45,7 +74,7 @@ app.listen(env.port, async () => {
       `[fb-cookies] ${fb.ok ? 'FORMATO OK' : 'FALHA'} — ${fb.reason}` +
         (fb.file ? ` (${fb.file}, ${fb.size || 0}b, tabs=${fb.hasTabs})` : '')
     );
-    if (fb.ok) {
+    if (fb.ok && validacaoSocialLiberada('facebook')) {
       const axios = require('axios');
       const remote = await validateFacebookSession(axios);
       console.log(
@@ -60,6 +89,11 @@ app.listen(env.port, async () => {
     await recoverStuckJobs();
   } catch (err) {
     console.error('[recover] falhou:', err.message);
+  }
+  try {
+    await require('./services/feedSugeridoService').retomarAposReinicio();
+  } catch (err) {
+    console.error('[feed-sugerido] retomar falhou:', err.message);
   }
 
   // Não interrompe o site: se o gateway tiver voltado sem a sessão em memória,

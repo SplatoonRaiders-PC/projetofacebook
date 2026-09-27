@@ -799,7 +799,8 @@ async function coletarInstagramAuthenticatedApi(handle) {
     },
   ];
 
-  for (const attempt of searchAttempts) {
+  const semMobile = !require('./instagramCookies').instagramMobileLiberado();
+  for (const attempt of searchAttempts.filter((a) => !(semMobile && /-mobile$/.test(a.label)))) {
     try {
       const response = await axios.get(attempt.url, {
         params: attempt.params,
@@ -844,7 +845,7 @@ async function coletarInstagramAuthenticatedApi(handle) {
     },
   ];
   let items = [];
-  for (const attempt of feedAttempts) {
+  for (const attempt of feedAttempts.filter((a) => !(semMobile && /-mobile$/.test(a.label)))) {
     try {
       const response = await axios.get(attempt.url, {
         params: { count: SCAN_LIMIT },
@@ -923,7 +924,7 @@ async function coletarInstagramWebApi(fonte) {
 
   const headers = {
     'User-Agent':
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+      (process.env.SOCIAL_USER_AGENT || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'),
     Accept: '*/*',
     'Accept-Language': 'pt-BR,pt;q=0.9,en;q=0.8',
     'X-IG-App-ID': '936619743392459',
@@ -1019,7 +1020,7 @@ async function coletarInstagramHtml(fonte) {
 
   const headers = {
     'User-Agent':
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+      (process.env.SOCIAL_USER_AGENT || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'),
     Accept: 'text/html,application/xhtml+xml',
     'Accept-Language': 'pt-BR,pt;q=0.9,en;q=0.8',
     'Sec-Fetch-Dest': 'document',

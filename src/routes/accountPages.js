@@ -28,6 +28,10 @@ router.post('/usuarios/:id/nivel', requireAuth, requireAdmin, usersController.up
 router.post('/usuarios/:id/senha', requireAuth, requireAdmin, usersController.resetPassword);
 router.post('/usuarios/:id/remover', requireAuth, requireAdmin, usersController.remove);
 
+const feedSugeridoController = require('../controllers/feedSugeridoController');
+router.get('/configuracoes/feed-sugerido', requireAuth, requireAdmin, feedSugeridoController.paginaAdmin);
+router.put('/api/admin/feed-sugerido/config', requireAuth, requireAdmin, feedSugeridoController.salvarAdmin);
+
 const midiasController = require('../controllers/midiasController');
 router.get('/midias', requireAuth, requireAdmin, midiasController.index);
 

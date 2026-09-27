@@ -152,11 +152,21 @@ function shortcodeToMediaId(shortcode) {
   return id.toString();
 }
 
+/**
+ * Cabeçalho do app Android com a mesma sessão do navegador faz o Instagram ver
+ * a conta em dois "aparelhos" ao mesmo tempo e bloquear ("várias sessões").
+ * Só liga com INSTAGRAM_API_MOBILE=1.
+ */
+function instagramMobileLiberado() {
+  return ['1', 'true', 'sim', 'on'].includes(String(process.env.INSTAGRAM_API_MOBILE || '').toLowerCase());
+}
+
 function instagramApiHeaders(cookieHeader, { mobile = false, wwwClaim = '0' } = {}) {
+  if (mobile && !instagramMobileLiberado()) mobile = false;
   const csrf = loadInstagramCookies()?.cookies?.csrftoken || '';
   const ua = mobile
     ? 'Instagram 192.168.2.4.117 Android (33/13; 420dpi; 1080x2400; Xiaomi; M2101K6G; sweet; qcom; pt_BR; 458229257)'
-    : 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+    : (process.env.SOCIAL_USER_AGENT || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36');
   return {
     'User-Agent': ua,
     Accept: '*/*',
@@ -186,7 +196,7 @@ async function bootstrapInstagramSession(axiosClient) {
       maxRedirects: 5,
       headers: {
         'User-Agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+          (process.env.SOCIAL_USER_AGENT || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'),
         Accept: 'text/html,application/xhtml+xml',
         'Accept-Language': 'pt-BR,pt;q=0.9,en;q=0.8',
         Cookie: cookieHeader,
@@ -300,7 +310,7 @@ async function validateInstagramSession(axiosClient, bootstrap = null) {
       userId = account?.pk || account?.id || null;
     }
     let lastSearch = search;
-    if (!userId) {
+    if (!userId && instagramMobileLiberado()) {
       const mobileSearch = await axiosClient.get(
         'https://i.instagram.com/api/v1/users/search/',
         {
@@ -330,11 +340,13 @@ async function validateInstagramSession(axiosClient, bootstrap = null) {
       };
     }
 
+    // Sem o modo app, o feed é lido pelo mesmo host web do navegador.
+    const hostFeed = instagramMobileLiberado() ? 'i.instagram.com' : 'www.instagram.com';
     const feed = await axiosClient.get(
-      `https://i.instagram.com/api/v1/feed/user/${encodeURIComponent(String(userId))}/`,
+      `https://${hostFeed}/api/v1/feed/user/${encodeURIComponent(String(userId))}/`,
       {
         params: { count: 1 },
-        headers: mobileHeaders,
+        headers: instagramMobileLiberado() ? mobileHeaders : webHeaders,
         timeout: 20000,
         maxRedirects: 5,
         validateStatus: () => true,
@@ -375,6 +387,7 @@ module.exports = {
   resolveCleanInstagramCookiesFile,
   shortcodeToMediaId,
   instagramApiHeaders,
+  instagramMobileLiberado,
   bootstrapInstagramSession,
   instagramFailureReason,
   validateInstagramSession,

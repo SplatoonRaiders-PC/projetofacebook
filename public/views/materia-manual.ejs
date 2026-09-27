@@ -1,6 +1,7 @@
 <%- include('partials/app-start') %>
   <link rel="stylesheet" href="/css/materia-chat.css?v=20260902tomTitulosClaude1" />
   <link rel="stylesheet" href="/css/materia-manual.css?v=20260924modelos1" />
+  <link rel="stylesheet" href="/css/feed-sugerido.css?v=20260926feed1" />
 
   <main class="mia-chat mia-manual-claude" data-recolher-menu>
     <div id="chat-drawer-backdrop" class="mia-chat-drawer-backdrop" hidden aria-hidden="true"></div>
@@ -95,6 +96,10 @@
               <button type="button" data-start-matter="pautas" aria-controls="chat-radar-options" aria-expanded="false">
                 <span aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l6-6 4 4 8-9"/><path d="M15 6h6v6"/></svg></span>
                 <strong>Descobrir pautas</strong><small>Encontre seu próximo assunto</small>
+              </button>
+              <button type="button" class="mia-start-feed" data-feed-sugerido-open hidden>
+                <span aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="2.5" width="12" height="19" rx="2.5"/><path d="m10.5 9.5 4 2.5-4 2.5Z"/></svg></span>
+                <strong>Vídeos sugeridos</strong><small>Reels, Shorts e vídeos que as redes sugerem viram matérias</small>
               </button>
             </div>
             <section id="chat-radar-options" class="mia-chat-radar-start" aria-labelledby="chat-radar-start-title" hidden>
@@ -305,6 +310,10 @@
                           <span class="mia-chat-menu-item-title">Links</span>
                           <span class="mia-chat-prompt-text">Criar uma matéria por link</span>
                         </button>
+                        <button type="button" class="mia-chat-menu-item" data-feed-sugerido-open hidden title="Matérias a partir dos vídeos sugeridos pelas redes">
+                          <span class="mia-chat-menu-item-title">Feed</span>
+                          <span class="mia-chat-prompt-text">Vídeos sugeridos das redes</span>
+                        </button>
                       </div>
                     </section>
                   </div>
@@ -347,6 +356,79 @@
           <button type="submit">Criar rascunho e editar</button>
           <p id="chat-manual-status"></p>
         </form>
+
+        <div id="feed-sugerido-backdrop" class="mia-manual-backdrop hidden" hidden></div>
+        <section id="feed-sugerido" class="feed-sug hidden" role="dialog" aria-modal="true" aria-labelledby="feed-sugerido-titulo">
+          <div class="feed-sug-head">
+            <div>
+              <p class="feed-sug-eyebrow">Feed sugerido</p>
+              <h2 id="feed-sugerido-titulo">Vídeos sugeridos viram matérias</h2>
+            </div>
+            <button type="button" data-feed-sugerido-close aria-label="Fechar">×</button>
+          </div>
+
+          <form id="feed-sugerido-form" class="feed-sug-form">
+            <p class="feed-sug-help">O sistema abre as sugestões da conta cadastrada, como se estivesse rolando o feed, ouve o áudio de cada vídeo e escreve uma matéria-rascunho para você revisar e publicar.</p>
+
+            <fieldset>
+              <legend>Redes</legend>
+              <div id="feed-sugerido-redes" class="feed-sug-redes"><p class="feed-sug-muted">Carregando…</p></div>
+            </fieldset>
+
+            <div id="feed-sugerido-links" class="feed-sug-links"></div>
+
+            <div class="feed-sug-grid">
+              <label>
+                <span>Vídeos por rede</span>
+                <input id="feed-sugerido-qtd" type="number" min="1" max="10" value="10" />
+              </label>
+              <label>
+                <span>Página do Facebook</span>
+                <select id="feed-sugerido-pagina"><option value="">Página padrão</option></select>
+              </label>
+              <label>
+                <span>Tema <small>(opcional)</small></span>
+                <input id="feed-sugerido-tema" maxlength="120" placeholder="Ex.: gospel" />
+              </label>
+              <label>
+                <span>Tom</span>
+                <select id="feed-sugerido-tom">
+                  <option value="natural" selected>Natural</option>
+                  <option value="factual">Factual</option>
+                  <option value="direto">Direto</option>
+                  <option value="curiosidade">Curiosidade</option>
+                  <option value="emocional">Emocional</option>
+                  <option value="polemico">Suspense e polêmica</option>
+                </select>
+              </label>
+            </div>
+            <label class="feed-sug-check">
+              <input id="feed-sugerido-web" type="checkbox" />
+              <span>Pesquisar outras fontes para confirmar os fatos (mais lento)</span>
+            </label>
+
+            <p id="feed-sugerido-resumo" class="feed-sug-muted"></p>
+            <button type="submit" id="feed-sugerido-iniciar" class="feed-sug-primary">Buscar vídeos e criar matérias</button>
+            <p id="feed-sugerido-erro" class="feed-sug-erro" aria-live="polite"></p>
+          </form>
+
+          <div id="feed-sugerido-job" class="feed-sug-job" hidden>
+            <div class="feed-sug-job-head">
+              <strong id="feed-sugerido-job-status">—</strong>
+              <button type="button" id="feed-sugerido-cancelar" class="feed-sug-link">Cancelar</button>
+            </div>
+            <p id="feed-sugerido-job-msg" class="feed-sug-muted"></p>
+            <div class="feed-sug-bar"><i id="feed-sugerido-job-bar"></i></div>
+            <ul id="feed-sugerido-coleta" class="feed-sug-coleta"></ul>
+            <ol id="feed-sugerido-itens" class="feed-sug-itens"></ol>
+            <button type="button" id="feed-sugerido-nova" class="feed-sug-link" hidden>Nova coleta</button>
+          </div>
+
+          <details id="feed-sugerido-historico" class="feed-sug-hist" hidden>
+            <summary>Coletas anteriores</summary>
+            <ul id="feed-sugerido-historico-lista"></ul>
+          </details>
+        </section>
       </section>
     </div>
   </main>
@@ -457,4 +539,5 @@
   </script>
   <script src="/js/materia-chat.js?v=20260926capapub1"></script>
   <script src="/js/materia-chat-extras.js?v=20260915radarAmpliado1"></script>
+  <script src="/js/feed-sugerido.js?v=20260926feed1"></script>
 <%- include('partials/app-end') %>
