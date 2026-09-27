@@ -140,13 +140,20 @@
     jobAtual = job;
     const ativo = ATIVOS.includes(job.status);
     const escolhendo = job.status === 'aguardando_escolha';
+    const finalizada = ['concluido', 'erro', 'cancelado'].includes(job.status);
+    // Terminada a coleta, os vídeos que falharam ou não foram escolhidos
+    // podem ser marcados e escritos sem coletar de novo.
+    const podeEscolherItem = (item) =>
+      (escolhendo && item.status === 'pendente') ||
+      (finalizada && ['ignorado', 'erro'].includes(item.status));
+    const temEscolha = (job.itens || []).some(podeEscolherItem);
     form.hidden = ativo || escolhendo || job.status === 'concluido';
     jobEl.hidden = false;
     $('feed-sugerido-job-status').textContent = STATUS_JOB[job.status] || job.status;
     $('feed-sugerido-job-msg').textContent = job.mensagem || '';
     $('feed-sugerido-cancelar').hidden = !(ativo || escolhendo);
     $('feed-sugerido-nova').hidden = ativo || escolhendo;
-    $('feed-sugerido-escolha').hidden = !escolhendo;
+    $('feed-sugerido-escolha').hidden = !temEscolha;
     // Mantém as marcações do editor quando o painel é redesenhado.
     const marcadosAntes = new Set(
       [...document.querySelectorAll('#feed-sugerido-itens input[data-item]:checked')].map((el) => el.dataset.item)
@@ -182,7 +189,7 @@
         const badge = item.matter_id
           ? `<a class="feed-sug-badge ${classe}" href="/materias-ia/${esc(item.matter_id)}" target="_blank" rel="noopener">Abrir matéria</a>`
           : `<span class="feed-sug-badge ${classe}">${esc(rotulo)}</span>`;
-        const podeEscolher = escolhendo && item.status === 'pendente';
+        const podeEscolher = podeEscolherItem(item);
         const caixa = podeEscolher
           ? `<input type="checkbox" class="feed-sug-escolher" data-item="${esc(item.id)}" ${marcadosAntes.has(String(item.id)) ? 'checked' : ''} aria-label="Escrever matéria deste vídeo" />`
           : '';
@@ -196,7 +203,7 @@
           </div>${selo}</li>`;
       })
       .join('');
-    if (escolhendo) atualizarBotaoEscrever();
+    if (temEscolha) atualizarBotaoEscrever();
 
     clearTimeout(timer);
     if (ativo) timer = setTimeout(() => acompanhar(job.id), 4000);

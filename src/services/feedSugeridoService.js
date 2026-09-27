@@ -137,30 +137,49 @@ async function criarJob(userId, entrada = {}) {
   return obterJob(userId, id);
 }
 
-/** Modo "escolher": o editor marcou quais vídeos viram matéria. */
+/**
+ * O editor marcou quais vídeos viram matéria: na lista de escolha ou, depois
+ * de a coleta terminar, entre os que falharam/não foram escolhidos (refazer).
+ */
 async function escolherItens(userId, jobId, itemIds = []) {
   const job = await db(JOBS).where({ id: jobId, user_id: userId }).first();
   if (!job) throw erro(404, 'Coleta não encontrada.');
-  if (job.status !== 'aguardando_escolha') throw erro(409, 'Esta coleta não está esperando escolha.');
+  const aguardando = job.status === 'aguardando_escolha';
+  const finalizada = ['concluido', 'erro', 'cancelado'].includes(job.status);
+  if (!aguardando && !finalizada) throw erro(409, 'Espere esta coleta terminar para escolher outros vídeos.');
+  if (finalizada) {
+    const ativo = await db(JOBS).where({ user_id: userId }).whereIn('status', ATIVOS).first('id');
+    if (ativo) throw erro(409, 'Você já tem uma coleta em andamento. Aguarde terminar ou cancele.');
+  }
   const ids = [...new Set((Array.isArray(itemIds) ? itemIds : []).map(Number).filter(Boolean))];
   if (!ids.length) throw erro(400, 'Marque pelo menos um vídeo.');
 
   const escolhidos = await db(ITENS)
-    .where({ job_id: jobId, status: 'pendente' })
+    .where({ job_id: jobId })
+    .whereIn('status', aguardando ? ['pendente'] : ['ignorado', 'erro'])
     .whereIn('id', ids)
     .select('id');
-  if (!escolhidos.length) throw erro(400, 'Os vídeos marcados não pertencem a esta coleta.');
+  if (!escolhidos.length) throw erro(400, 'Os vídeos marcados não podem ser escritos nesta coleta.');
+  const idsEscolhidos = escolhidos.map((i) => i.id);
 
+  if (aguardando) {
+    await db(ITENS)
+      .where({ job_id: jobId, status: 'pendente' })
+      .whereNotIn('id', idsEscolhidos)
+      .update({ status: 'ignorado', etapa: 'Não escolhido', updated_at: db.fn.now() });
+  }
   await db(ITENS)
-    .where({ job_id: jobId, status: 'pendente' })
-    .whereNotIn('id', escolhidos.map((i) => i.id))
-    .update({ status: 'ignorado', etapa: 'Não escolhido', updated_at: db.fn.now() });
+    .whereIn('id', idsEscolhidos)
+    .update({ status: 'pendente', etapa: null, erro: null, updated_at: db.fn.now() });
 
   const opcoes = { ...parseJson(job.opcoes, {}), escolhaFeita: true };
   await atualizarJob(jobId, {
     status: 'na_fila',
     opcoes: JSON.stringify(opcoes),
     total: escolhidos.length,
+    concluidos: 0,
+    falhas: 0,
+    finished_at: null,
     mensagem: `${escolhidos.length} vídeo(s) escolhido(s). Na fila para escrever…`,
   });
   enfileirar(jobId);
@@ -386,24 +405,15 @@ async function executarJob(id) {
   });
 }
 
-function rotuloDoVideo(plataforma) {
-  if (plataforma === 'instagram') return 'Reel do Instagram';
-  if (plataforma === 'youtube') return 'Short do YouTube';
-  return 'vídeo do Facebook';
-}
-
-/** Pedido enviado ao mesmo redator do "Criar matéria". */
+/**
+ * Pedido enviado ao mesmo redator do "Criar matéria": SÓ o link, como o
+ * editor faz no chat. Texto longo junto de um link social é tratado pelo chat
+ * como a legenda colada pelo editor — instruções ali viravam a "legenda" do
+ * Reel e a checagem recusava escrever. As regras jornalísticas já são as do
+ * próprio chat.
+ */
 function pedidoDaMateria(item) {
-  const rede = ROTULOS[item.plataforma];
-  return [
-    item.url,
-    '',
-    `Escreva uma matéria jornalística a partir do que é dito neste ${rotuloDoVideo(item.plataforma)}.`,
-    'Abra com o fato principal no lead (quem, o quê, quando, onde), em terceira pessoa e em tom de notícia.',
-    'Atribua cada fala a quem a disse, com citações diretas entre aspas quando houver.',
-    `Cite a origem uma vez (por exemplo, "em vídeo publicado no ${rede}"), mas não transforme o texto em descrição do vídeo: evite "no vídeo", "a gravação mostra", "o conteúdo apresenta".`,
-    'Use somente fatos da transcrição e da legenda; não invente nomes, datas, números nem contexto.',
-  ].join('\n');
+  return item.url;
 }
 
 /** Mesmo pedido de capa do botão "Capa com IA" do /materia-manual. */
@@ -527,7 +537,7 @@ async function processarItem(job, opcoes, item) {
     await descartarConversa();
     const trecho = String(mensagem?.conteudo || mensagem?.content || '').replace(/\s+/g, ' ').trim().slice(0, 220);
     await atualizarItem(item.id, {
-      status: 'ignorado',
+      status: 'erro',
       etapa: null,
       erro: corta(`A IA não escreveu matéria deste vídeo${trecho ? `: ${trecho}` : '.'}`, 500),
     });
