@@ -66,7 +66,122 @@ function shortcodesDoHtml(html) {
   return [...codes];
 }
 
-async function coletarInstagram({ quantidade, seedUrl = '' }) {
+/** Caminho sem query string (a query pode carregar tokens): só para logs. */
+function caminhoDoUrl(url) {
+  try {
+    const u = new URL(url);
+    return u.host + u.pathname;
+  } catch {
+    return String(url || '').split('?')[0];
+  }
+}
+
+function paresDeCookie(cookieHeader) {
+  const mapa = new Map();
+  for (const parte of String(cookieHeader || '').split(/;\s*/)) {
+    const i = parte.indexOf('=');
+    if (i > 0) mapa.set(parte.slice(0, i).trim(), parte.slice(i + 1).trim());
+  }
+  return mapa;
+}
+
+/**
+ * Pedido a Instagram/Facebook seguindo os redirecionamentos na mão, como o navegador:
+ * guarda os cookies que cada resposta manda (sem isso o axios entra em loop,
+ * "Maximum number of redirects exceeded") e registra para onde foi mandado.
+ */
+async function pedirSeguindoRedirects({
+  method = 'get',
+  url,
+  data,
+  headers,
+  cookieHeader,
+  trace = [],
+  bloqueio = /\/accounts\/login|\/challenge|\/checkpoint|\/suspended|\/accounts\/disabled/i,
+}) {
+  const cookies = paresDeCookie(cookieHeader);
+  let atual = url;
+  let metodo = method;
+  let corpo = data;
+  let sessaoEncerrada = false;
+  const visitados = new Set();
+
+  for (let salto = 0; salto <= 6; salto += 1) {
+    const resp = await axios.request({
+      method: metodo,
+      url: atual,
+      data: corpo,
+      headers: { ...headers, Cookie: [...cookies].map(([k, v]) => `${k}=${v}`).join('; ') },
+      timeout: 25_000,
+      maxRedirects: 0,
+      validateStatus: () => true,
+      responseType: 'text',
+      transformResponse: [(bruto) => bruto],
+    });
+
+    for (const bruto of [].concat(resp.headers?.['set-cookie'] || [])) {
+      const par = String(bruto).split(';')[0];
+      const i = par.indexOf('=');
+      if (i <= 0) continue;
+      const nome = par.slice(0, i).trim();
+      const valor = par.slice(i + 1).trim();
+      const apagando = !valor || valor === '""' || /max-age=0|expires=thu, 01[- ]jan[- ]1970/i.test(bruto);
+      if (apagando) {
+        // Nunca descarta o sessionid do arquivo; só registra o aviso.
+        if (['sessionid', 'xs', 'c_user'].includes(nome)) sessaoEncerrada = true;
+        continue;
+      }
+      cookies.set(nome, valor);
+    }
+
+    const location = resp.headers?.location ? new URL(resp.headers.location, atual).toString() : null;
+    trace.push(
+      `${metodo.toUpperCase()} ${caminhoDoUrl(atual)} → ${resp.status}` +
+        (location ? ` → ${caminhoDoUrl(location)}` : '') +
+        (sessaoEncerrada ? ' (cookie de sessão apagado pelo site)' : '')
+    );
+
+    if (resp.status >= 300 && resp.status < 400 && location) {
+      if (bloqueio.test(location)) {
+        return { status: resp.status, bloqueio: caminhoDoUrl(location), sessaoEncerrada, finalUrl: location };
+      }
+      if (visitados.has(location)) {
+        return { status: resp.status, loop: caminhoDoUrl(location), sessaoEncerrada, finalUrl: location };
+      }
+      visitados.add(atual);
+      atual = location;
+      if (resp.status === 303 || ((resp.status === 301 || resp.status === 302) && metodo !== 'get')) {
+        metodo = 'get';
+        corpo = undefined;
+      }
+      continue;
+    }
+
+    let json = null;
+    try {
+      json = JSON.parse(resp.data);
+    } catch {
+      json = null;
+    }
+    return { status: resp.status, json, texto: String(resp.data || ''), sessaoEncerrada, finalUrl: atual };
+  }
+  return { status: 0, loop: caminhoDoUrl(atual), sessaoEncerrada, finalUrl: atual };
+}
+
+function motivoDoInstagram(resp, instagramFailureReason) {
+  if (resp.sessaoEncerrada) {
+    return 'o Instagram encerrou a sessão dos cookies (sessionid invalidado). Faça login de novo e exporte os cookies.';
+  }
+  if (resp.bloqueio) {
+    return `o Instagram mandou para ${resp.bloqueio}: renove os cookies ou confirme a conta no app.`;
+  }
+  if (resp.loop) {
+    return `o Instagram ficou redirecionando em loop (${resp.loop}). Normalmente é sessão recusada: renove os cookies.`;
+  }
+  return instagramFailureReason(resp.json || resp.texto, resp.status);
+}
+
+async function coletarInstagram({ quantidade, seedUrl = '', trace = [] }) {
   const {
     bootstrapInstagramSession,
     buildInstagramCookieHeader,
@@ -77,7 +192,7 @@ async function coletarInstagram({ quantidade, seedUrl = '' }) {
   } = require('./instagramCookies');
 
   const diag = diagnoseInstagramCookies();
-  if (!diag.ok) return { itens: [], origem: null, motivo: `Cookies do Instagram: ${diag.reason}` };
+  if (!diag.ok) return { itens: [], origem: null, motivo: `Cookies do Instagram: ${diag.reason}`, trace };
 
   const seedCode = shortcodeDoInstagram(seedUrl);
   const seedMediaId = seedCode ? shortcodeToMediaId(seedCode) : null;
@@ -91,8 +206,14 @@ async function coletarInstagram({ quantidade, seedUrl = '' }) {
 
   const boot = await bootstrapInstagramSession(axios);
   const cookieHeader = boot?.cookieHeader || buildInstagramCookieHeader();
+  trace.push(
+    `home: HTTP ${boot?.homeStatus ?? '?'}, claim ${boot?.claim && boot.claim !== '0' ? 'ok' : 'ausente'}` +
+      (boot?.error ? `, erro: ${boot.error}` : '')
+  );
   const headers = instagramApiHeaders(cookieHeader, { mobile: false, wwwClaim: boot?.claim || '0' });
+  delete headers.Cookie; // pedirSeguindoRedirects monta o Cookie a cada salto
   let motivo = null;
+  const origens = [];
 
   // 1) Mesmo endpoint que a aba Reels usa ao rolar (encadeado no Reel do link).
   let maxId = '';
@@ -104,51 +225,54 @@ async function coletarInstagram({ quantidade, seedUrl = '' }) {
       ...(maxId ? { max_id: maxId } : {}),
       ...(seedMediaId ? { chaining_media_id: seedMediaId } : {}),
     });
-    let resposta;
+    let resp;
     try {
-      resposta = await axios.post('https://www.instagram.com/api/v1/clips/discover/', corpo.toString(), {
+      resp = await pedirSeguindoRedirects({
+        method: 'post',
+        url: 'https://www.instagram.com/api/v1/clips/discover/',
+        data: corpo.toString(),
         headers: { ...headers, 'Content-Type': 'application/x-www-form-urlencoded' },
-        timeout: 25_000,
-        maxRedirects: 3,
-        validateStatus: () => true,
+        cookieHeader,
+        trace,
       });
     } catch (err) {
-      motivo = `Instagram: ${err.message}`;
+      motivo = err.message;
       break;
     }
-    if (resposta.status < 200 || resposta.status >= 300 || typeof resposta.data !== 'object') {
-      motivo = `Instagram recusou a lista de Reels: ${instagramFailureReason(resposta.data, resposta.status)}`;
+    if (resp.status < 200 || resp.status >= 300 || !resp.json) {
+      motivo = `lista de Reels recusada: ${motivoDoInstagram(resp, instagramFailureReason)}`;
       break;
     }
     const antes = itens.length;
-    for (const entrada of resposta.data?.items || []) adicionar(itemDoMediaInstagram(entrada?.media || entrada));
-    maxId = String(resposta.data?.paging_info?.max_id || '');
-    const temMais = resposta.data?.paging_info?.more_available !== false;
+    for (const entrada of resp.json.items || []) adicionar(itemDoMediaInstagram(entrada?.media || entrada));
+    if (itens.length > antes && !origens.includes('clips-discover')) origens.push('clips-discover');
+    maxId = String(resp.json.paging_info?.max_id || '');
+    const temMais = resp.json.paging_info?.more_available !== false;
     if (!maxId || !temMais || itens.length === antes) break;
     await pausaHumana();
   }
-  if (itens.length >= quantidade) return { itens: itens.slice(0, quantidade), origem: 'clips-discover', motivo: null };
+  if (itens.length >= quantidade) {
+    return { itens: itens.slice(0, quantidade), origem: 'clips-discover', motivo: null, trace };
+  }
 
   // 2) Plano B: os Reels que já vêm no HTML da página (a primeira "tela").
   try {
     const alvo = seedCode ? `https://www.instagram.com/reels/${seedCode}/` : 'https://www.instagram.com/reels/';
-    const html = await axios.get(alvo, {
+    const resp = await pedirSeguindoRedirects({
+      url: alvo,
       headers: {
         'User-Agent': USER_AGENT,
         Accept: 'text/html,application/xhtml+xml',
         'Accept-Language': 'pt-BR,pt;q=0.9,en;q=0.8',
-        Cookie: cookieHeader,
       },
-      timeout: 25_000,
-      maxRedirects: 5,
-      validateStatus: () => true,
-      responseType: 'text',
+      cookieHeader,
+      trace,
     });
-    const finalUrl = String(html.request?.res?.responseUrl || '');
-    if (/\/accounts\/login|\/challenge\//i.test(finalUrl)) {
-      motivo = motivo || 'Instagram pediu login/verificação: renove os cookies do Instagram.';
+    if (resp.bloqueio || resp.loop || resp.sessaoEncerrada) {
+      motivo = motivo || motivoDoInstagram(resp, instagramFailureReason);
     } else {
-      for (const code of shortcodesDoHtml(html.data)) {
+      const antes = itens.length;
+      for (const code of shortcodesDoHtml(resp.texto)) {
         if (itens.length >= quantidade) break;
         adicionar({
           plataforma: 'instagram',
@@ -161,15 +285,19 @@ async function coletarInstagram({ quantidade, seedUrl = '' }) {
           mediaUrl: null,
         });
       }
+      if (itens.length > antes) origens.push('html');
+      else if (!motivo) motivo = `a página de Reels abriu (HTTP ${resp.status}), mas sem vídeos no HTML.`;
     }
   } catch (err) {
-    motivo = motivo || `Instagram: ${err.message}`;
+    motivo = motivo || err.message;
   }
 
+  if (!itens.length) console.warn('[feed-sugerido] instagram sem Reels:', trace.join(' | '));
   return {
     itens: itens.slice(0, quantidade),
-    origem: itens.length ? 'clips-discover+html' : null,
+    origem: origens.join('+') || null,
     motivo: itens.length ? null : motivo || 'O Instagram não devolveu Reels sugeridos.',
+    trace,
   };
 }
 
@@ -267,7 +395,7 @@ async function coletarYoutube({ quantidade, seedUrl = '', tema = '' }) {
       motivo: itens.length ? null : 'O YouTube não devolveu Shorts sugeridos.',
     };
   } catch (err) {
-    return { itens: [], origem: null, motivo: `YouTube: ${err.message}` };
+    return { itens: [], origem: null, motivo: err.message };
   }
 }
 
@@ -297,7 +425,7 @@ function videosDoHtmlFacebook(html) {
   return [...achados].map(([id, tipo]) => ({ id, tipo }));
 }
 
-async function coletarFacebook({ quantidade, seedUrl = '' }) {
+async function coletarFacebook({ quantidade, seedUrl = '', trace = [] }) {
   const {
     buildFacebookCookieHeader,
     facebookHtmlHeaders,
@@ -324,19 +452,26 @@ async function coletarFacebook({ quantidade, seedUrl = '' }) {
   for (const alvo of paginas) {
     if (itens.length >= quantidade) break;
     try {
-      const resposta = await axios.get(alvo, {
-        headers: facebookHtmlHeaders(cookieHeader),
-        timeout: 25_000,
-        maxRedirects: 5,
-        validateStatus: () => true,
-        responseType: 'text',
+      const headersFb = facebookHtmlHeaders(cookieHeader);
+      delete headersFb.Cookie; // pedirSeguindoRedirects monta o Cookie a cada salto
+      const resposta = await pedirSeguindoRedirects({
+        url: alvo,
+        headers: headersFb,
+        cookieHeader,
+        trace,
+        bloqueio: /\/login|\/checkpoint|\/recover/i,
       });
-      const finalUrl = String(resposta.request?.res?.responseUrl || '');
-      if (/\/login|checkpoint/i.test(finalUrl) || /"USER_ID":"0"/.test(String(resposta.data || ''))) {
-        motivo = 'O Facebook pediu login/verificação: renove os cookies do Facebook.';
+      if (resposta.bloqueio || resposta.sessaoEncerrada || /"USER_ID":"0"/.test(resposta.texto || '')) {
+        motivo = resposta.bloqueio
+          ? `o Facebook mandou para ${resposta.bloqueio}: renove os cookies do Facebook.`
+          : 'o Facebook não aceitou a sessão dos cookies: faça login de novo e exporte os cookies.';
         break;
       }
-      for (const { id, tipo } of videosDoHtmlFacebook(resposta.data)) {
+      if (resposta.loop) {
+        motivo = `o Facebook ficou redirecionando em loop (${resposta.loop}).`;
+        continue;
+      }
+      for (const { id, tipo } of videosDoHtmlFacebook(resposta.texto)) {
         if (itens.length >= quantidade) break;
         if (vistos.has(id)) continue;
         vistos.add(id);
@@ -353,7 +488,7 @@ async function coletarFacebook({ quantidade, seedUrl = '' }) {
       }
       if (itens.length) origem = origem ? `${origem}+html` : 'html';
     } catch (err) {
-      motivo = `Facebook: ${err.message}`;
+      motivo = err.message;
     }
     await pausaHumana();
   }
@@ -362,6 +497,7 @@ async function coletarFacebook({ quantidade, seedUrl = '' }) {
     itens: itens.slice(0, quantidade),
     origem,
     motivo: itens.length ? null : motivo || 'O Facebook não devolveu vídeos sugeridos.',
+    trace,
   };
 }
 
@@ -387,4 +523,5 @@ module.exports = {
   videoIdDoYoutube,
   idDoVideoFacebook,
   videosDoHtmlFacebook,
+  pedirSeguindoRedirects,
 };

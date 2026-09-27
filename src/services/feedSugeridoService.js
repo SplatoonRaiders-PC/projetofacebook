@@ -237,6 +237,8 @@ async function coletar(job, opcoes) {
       repetidos: resultado.itens.length - resultado.itens.filter((i) => !usados.has(String(i.externalId))).length,
       origem: resultado.origem,
       motivo: resultado.motivo,
+      // Últimos passos (só caminho e status HTTP) para diagnosticar bloqueios.
+      passos: resultado.motivo ? (resultado.trace || []).slice(-6) : [],
     };
     console.info(
       `[feed-sugerido] job ${job.id} ${rede}: ${resultado.itens.length} encontrados, ${novos.length} novos` +

@@ -142,8 +142,11 @@
         const nome = esc(nomes[rede] || rede);
         const base = `<b>${nome}:</b> ${c.novos || 0} vídeo(s) novo(s)` +
           (c.repetidos ? `, ${c.repetidos} já usado(s) antes` : '');
+        const passos = (c.passos || []).length
+          ? `<details class="feed-sug-passos"><summary>Ver passos</summary><code>${(c.passos || []).map(esc).join('<br>')}</code></details>`
+          : '';
         return c.motivo
-          ? `<li class="is-aviso">${base} — ${esc(c.motivo)}</li>`
+          ? `<li class="is-aviso">${base} — ${esc(c.motivo)}${passos}</li>`
           : `<li>${base}</li>`;
       })
       .join('');

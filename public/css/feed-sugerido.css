@@ -77,6 +77,9 @@
 .feed-sug-coleta { margin: 0; padding: 0; list-style: none; display: grid; gap: .25rem; font-size: .75rem; color: #94a3b8; }
 .feed-sug-coleta b { color: #e2e8f0; font-weight: 600; }
 .feed-sug-coleta .is-aviso { color: #fbbf24; }
+.feed-sug-passos { margin-top: .25rem; color: #94a3b8; }
+.feed-sug-passos summary { cursor: pointer; font-size: .7rem; }
+.feed-sug-passos code { display: block; margin-top: .3rem; padding: .45rem .55rem; border-radius: .4rem; background: rgba(2, 6, 23, .7); font-size: .68rem; line-height: 1.5; word-break: break-all; white-space: normal; }
 
 .feed-sug-itens { margin: 0; padding: 0; list-style: none; display: grid; gap: .45rem; }
 .feed-sug-item {
