@@ -53,6 +53,14 @@ function corta(valor, max) {
   return texto ? texto.slice(0, max) : null;
 }
 
+async function resolverModeloDoFeed(pedido) {
+  if (!require('./deepseekService').usarTokenFree('conversa')) {
+    if (pedido) throw erro(409, 'A seleção de modelos está indisponível. Atualize a página antes de criar as matérias.');
+    return null;
+  }
+  return require('./materiaModelosService').resolverModelo(pedido, { estrito: true });
+}
+
 async function atualizarJob(id, dados) {
   await db(JOBS).where({ id }).update({ ...dados, updated_at: db.fn.now() });
 }
@@ -101,6 +109,7 @@ async function criarJob(userId, entrada = {}) {
   }
 
   // Uma lista esperando escolha não prende o editor: a nova coleta a substitui.
+  const modelo = await resolverModeloDoFeed(entrada.modelo);
   const esperando = await db(JOBS).where({ user_id: userId, status: 'aguardando_escolha' }).select('id');
   for (const { id } of esperando) {
     await atualizarJob(id, { status: 'cancelado', mensagem: 'Substituída por uma nova coleta.', finished_at: db.fn.now() });
@@ -115,6 +124,7 @@ async function criarJob(userId, entrada = {}) {
     if (link && /^https?:\/\//i.test(link)) seeds[rede] = link.slice(0, 1000);
   }
   const opcoes = {
+    modelo,
     seeds,
     tema: corta(entrada.tema, 120) || config.temaPadrao || '',
     tom: corta(entrada.tom, 30) || 'natural',
@@ -141,7 +151,7 @@ async function criarJob(userId, entrada = {}) {
  * O editor marcou quais vídeos viram matéria: na lista de escolha ou, depois
  * de a coleta terminar, entre os que falharam/não foram escolhidos (refazer).
  */
-async function escolherItens(userId, jobId, itemIds = []) {
+async function escolherItens(userId, jobId, itemIds = [], { modelo } = {}) {
   const job = await db(JOBS).where({ id: jobId, user_id: userId }).first();
   if (!job) throw erro(404, 'Coleta não encontrada.');
   const aguardando = job.status === 'aguardando_escolha';
@@ -161,6 +171,8 @@ async function escolherItens(userId, jobId, itemIds = []) {
     .select('id');
   if (!escolhidos.length) throw erro(400, 'Os vídeos marcados não podem ser escritos nesta coleta.');
   const idsEscolhidos = escolhidos.map((i) => i.id);
+  const opcoes = { ...parseJson(job.opcoes, {}), escolhaFeita: true };
+  opcoes.modelo = await resolverModeloDoFeed(modelo ?? opcoes.modelo);
 
   if (aguardando) {
     await db(ITENS)
@@ -172,7 +184,6 @@ async function escolherItens(userId, jobId, itemIds = []) {
     .whereIn('id', idsEscolhidos)
     .update({ status: 'pendente', etapa: null, erro: null, updated_at: db.fn.now() });
 
-  const opcoes = { ...parseJson(job.opcoes, {}), escolhaFeita: true };
   await atualizarJob(jobId, {
     status: 'na_fila',
     opcoes: JSON.stringify(opcoes),
@@ -343,6 +354,12 @@ async function executarJob(id) {
   if (!job || !ATIVOS.includes(job.status)) return;
   const opcoes = parseJson(job.opcoes, {});
 
+  // Também fixa o padrão uma única vez para coletas antigas sem modelo salvo.
+  if (!opcoes.modelo) {
+    opcoes.modelo = await resolverModeloDoFeed(null);
+    await atualizarJob(id, { opcoes: JSON.stringify(opcoes) });
+  }
+
   const jaTemItens = await db(ITENS).where({ job_id: id }).first('id');
   if (!jaTemItens) {
     await atualizarJob(id, { status: 'coletando', started_at: db.fn.now() });
@@ -484,15 +501,11 @@ async function aplicarCapaChatgpt({ userId, matterId, thumbnail }) {
 async function processarItem(job, opcoes, item) {
   const chatService = require('./materiaChatService');
   const { comModelo } = require('./tokenFreeGatewayService');
-  const deepseekService = require('./deepseekService');
 
   await atualizarItem(item.id, { status: 'transcrevendo', etapa: 'Lendo o vídeo e transcrevendo…', erro: null });
 
-  // O mesmo modelo padrão do "Criar matéria" (liberado pelo admin em /claude).
-  let modelo = null;
-  if (deepseekService.usarTokenFree('conversa')) {
-    modelo = await require('./materiaModelosService').resolverModelo(null);
-  }
+  // O lote conserva a escolha mesmo após reinício ou mudança do padrão global.
+  const modelo = await resolverModeloDoFeed(opcoes.modelo);
 
   let ultimaEtapa = 0;
   let chatId = null;

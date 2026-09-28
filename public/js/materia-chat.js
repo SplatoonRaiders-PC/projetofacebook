@@ -238,6 +238,8 @@
     if (el.modeloIaNome) el.modeloIaNome.textContent = nome;
     if (el.modeloIaNivel) el.modeloIaNivel.textContent = nivel;
     el.modeloIa.dataset.provider = modelo.provider || '';
+    el.modeloIa.dataset.modelo = state.modeloEscolhido || '';
+    document.dispatchEvent(new CustomEvent('materia:modelo-alterado'));
     el.modeloIa.title = [
       `Modelo em uso: ${nome}${nivel ? ` ${nivel}` : ''}`,
       modelo.modelo ? `ID: ${modelo.modelo}` : null,

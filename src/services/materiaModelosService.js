@@ -82,10 +82,16 @@ async function listarHabilitados() {
 }
 
 /** Modelo pedido pelo editor, se estiver liberado; senão o padrão. */
-async function resolverModelo(pedido) {
+async function resolverModelo(pedido, { estrito = false } = {}) {
   const lista = await listarHabilitados();
   const id = String(pedido || '').trim();
-  return (lista.find((item) => item.id === id) || lista[0]).id;
+  const escolhido = lista.find((item) => item.id === id);
+  if (estrito && id && !escolhido) {
+    const err = new Error('O modelo escolhido não está mais habilitado. Selecione outro modelo antes de criar as matérias.');
+    err.status = 400;
+    throw err;
+  }
+  return (escolhido || lista[0]).id;
 }
 
 /**

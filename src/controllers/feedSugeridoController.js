@@ -56,7 +56,8 @@ async function escolher(req, res, next) {
     const job = await feedSugeridoService.escolherItens(
       req.session.userId,
       Number(req.params.id),
-      req.body?.itens || []
+      req.body?.itens || [],
+      { modelo: req.body?.modelo }
     );
     res.json({ job });
   } catch (err) {

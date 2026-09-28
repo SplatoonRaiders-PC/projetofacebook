@@ -71,6 +71,18 @@
     return (form.querySelector('input[name="feed-modo"]:checked') || {}).value || 'automatico';
   }
 
+  function modeloEscolhido() {
+    return $('chat-ai-model')?.dataset.modelo || null;
+  }
+
+  function atualizarModelo() {
+    const nome = $('chat-ai-model-name')?.textContent?.trim();
+    const aviso = $('feed-sugerido-modelo');
+    if (aviso) aviso.textContent = nome ? `Escrever com: ${nome}` : 'Usando o modelo padrão';
+  }
+
+  document.addEventListener('materia:modelo-alterado', atualizarModelo);
+
   function redesMarcadas() {
     return [...redesEl.querySelectorAll('input[name="feed-rede"]:checked')].map((el) => el.value);
   }
@@ -151,6 +163,9 @@
     jobEl.hidden = false;
     $('feed-sugerido-job-status').textContent = STATUS_JOB[job.status] || job.status;
     $('feed-sugerido-job-msg').textContent = job.mensagem || '';
+    $('feed-sugerido-job-modelo').textContent = job.opcoes?.modelo
+      ? `Modelo deste lote: ${job.opcoes.modelo}`
+      : 'Modelo deste lote: padrão';
     $('feed-sugerido-cancelar').hidden = !(ativo || escolhendo);
     $('feed-sugerido-nova').hidden = ativo || escolhendo;
     $('feed-sugerido-escolha').hidden = !temEscolha;
@@ -248,6 +263,7 @@
     }
     document.querySelectorAll('.mia-chat-more[open]').forEach((m) => m.removeAttribute('open'));
     erroEl.textContent = '';
+    atualizarModelo();
     carregarPaginas();
     carregarHistorico().then((jobs) => {
       const ativo = jobs.find((j) => ATIVOS.includes(j.status) || j.status === 'aguardando_escolha');
@@ -274,6 +290,7 @@
         method: 'POST',
         body: JSON.stringify({
           plataformas,
+          modelo: modeloEscolhido(),
           quantidade: Number(qtdEl.value) || 10,
           facebookPageId: paginaEl.value || null,
           tema: temaEl.value,
@@ -316,7 +333,7 @@
     try {
       const { job } = await api(`/api/feed-sugerido/jobs/${jobAtual.id}/escolher`, {
         method: 'POST',
-        body: JSON.stringify({ itens }),
+        body: JSON.stringify({ itens, modelo: modeloEscolhido() }),
       });
       $('feed-sugerido-todos').checked = false;
       renderJob(job);
