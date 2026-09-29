@@ -510,6 +510,52 @@ router.post('/anexos-imagem', (req, res, next) => {
   });
 });
 
+/* —— Furos do dia: notícias quentes por nicho → matérias em lote —— */
+
+router.get('/furos/nichos', async (req, res, next) => {
+  try {
+    const furos = require('../services/furosService');
+    return res.json({
+      ok: true,
+      nichos: furos.listarNichos(),
+      sugeridos: await furos.escolherNichosAutomaticos(req.session.userId),
+    });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+router.post('/furos/buscar', async (req, res, next) => {
+  try {
+    const body = req.body || {};
+    const resultado = await require('../services/furosService').buscarFuros({
+      userId: req.session.userId,
+      nichos: Array.isArray(body.nichos) ? body.nichos.slice(0, 8) : [],
+      horas: Number(body.horas) || 24,
+      limite: Math.min(Math.max(Number(body.limite) || 12, 3), 20),
+    });
+    return res.json({ ok: true, ...resultado });
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    return next(err);
+  }
+});
+
+/** Uma pauta por chamada: o front mostra o progresso de cada matéria. */
+router.post('/furos/gerar', async (req, res, next) => {
+  try {
+    const resultado = await require('../services/furosService').gerarFuro({
+      userId: req.session.userId,
+      pauta: req.body?.pauta || {},
+      facebookPageId: req.body?.facebookPageId || null,
+    });
+    return res.json({ ok: true, ...resultado });
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    return next(err);
+  }
+});
+
 module.exports = router;
 module.exports.TEMAS_PADRAO = TEMAS_PADRAO;
 module.exports.radarPorTemas = radarPorTemas;
