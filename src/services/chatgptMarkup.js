@@ -47,8 +47,36 @@ function corrigirLinkColadoNaFonte(linha) {
   return linha.replace(/\burl(?=\S)[^\n]*?(https?:\/\/[^\s*]+)/i, '$1');
 }
 
+/**
+ * O Claude web embrulha textos longos num "documento":
+ *   :::writing{variant="document" id="31847" title="Título"}
+ *   …matéria…
+ *   :::
+ * Na interface dele isso vira um cartão; aqui sobrava como texto, e a linha
+ * de abertura virava o título da matéria. Remove abertura e fechamento.
+ */
+function removerBlocosDoClaude(texto) {
+  if (!texto.includes(':::')) return texto;
+  return texto
+    // Abertura em linha própria (leva a quebra de linha junto).
+    .replace(/(^|\n)[ \t]*:::[a-z][\w-]*(?:\{[^}\n]*\})?[ \t]*(?:\r?\n|$)/gi, '$1')
+    // Abertura colada ao texto.
+    .replace(/:::[a-z][\w-]*\{[^}\n]*\}[ \t]*/gi, '')
+    // Fechamento ":::" sozinho na linha ou no fim de uma linha.
+    .replace(/[ \t]*(?<![:\w]):::(?![:\w{])[ \t]*(?=\r?\n|$)/g, '');
+}
+
+/**
+ * Posição de uma abertura ":::nome{…" que ainda não terminou de chegar no
+ * streaming (ou -1). Até fechar, esse trecho não é mostrado ao editor.
+ */
+function inicioDeBlocoAberto(texto) {
+  const m = String(texto).match(/(?:^|\s)(:{1,3}(?:[a-z][\w-]*(?:\{[^}\n]*)?)?)$/i);
+  return m ? texto.length - m[1].length : -1;
+}
+
 function limparMarcacaoChatgpt(texto, { corrigirFonte = true } = {}) {
-  const valor = String(texto ?? '');
+  const valor = removerBlocosDoClaude(String(texto ?? ''));
   return valor
     .split('\n')
     .map((linha) => {
@@ -73,7 +101,9 @@ function criarLimpadorDeStream() {
     empurrar(delta) {
       bruto += String(delta || '');
       const aberta = bruto.lastIndexOf(INICIO);
-      const fim = aberta >= 0 && bruto.indexOf('', aberta) < 0 ? aberta : bruto.length;
+      let fim = aberta >= 0 && bruto.indexOf('', aberta) < 0 ? aberta : bruto.length;
+      const blocoAberto = inicioDeBlocoAberto(bruto.slice(0, fim));
+      if (blocoAberto >= 0) fim = blocoAberto;
       // Sem a correção da Fonte: ela reescreve texto já entregue. O texto
       // final devolvido pelo gateway passa pela limpeza completa.
       const limpo = limparMarcacaoChatgpt(bruto.slice(0, fim), { corrigirFonte: false });
@@ -88,4 +118,4 @@ function criarLimpadorDeStream() {
   };
 }
 
-module.exports = { limparMarcacaoChatgpt, criarLimpadorDeStream };
+module.exports = { limparMarcacaoChatgpt, criarLimpadorDeStream, removerBlocosDoClaude };

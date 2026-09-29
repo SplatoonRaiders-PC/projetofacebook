@@ -1073,7 +1073,9 @@ function interpretarResposta(conteudo) {
     extrairHashtagsDoTexto,
     removerComentariosEditoriaisIa,
   } = require('./editorialGuidelinesFb');
-  const bruto = removerComentariosEditoriaisIa(String(conteudo || '')).trim();
+  // Respostas antigas podem ter o bloco ":::writing{…}" do Claude web.
+  const { removerBlocosDoClaude } = require('./chatgptMarkup');
+  const bruto = removerComentariosEditoriaisIa(removerBlocosDoClaude(String(conteudo || ''))).trim();
   if (!bruto) return { ehMateria: false, titulo: null, corpo: '', hashtags: [] };
 
   const { body, tags } = extrairHashtagsDoTexto(bruto);
@@ -1585,7 +1587,7 @@ function limparParaBanco(valor, max = 500) {
 }
 
 function serializarMensagem(row) {
-  const conteudoBruto = String(row.content || '');
+  const conteudoBruto = require('./chatgptMarkup').removerBlocosDoClaude(String(row.content || ''));
   // Também limpa mensagens antigas já gravadas no banco, para o bloco não
   // reaparecer ao recarregar uma conversa criada antes desta correção.
   const conteudo =
