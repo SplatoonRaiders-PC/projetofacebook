@@ -122,6 +122,7 @@ function carregar({ imagem, avaliacoes = null, furos = [] }) {
         }
       },
     },
+    '../models/Publications': { historyForDedupe: async () => [] },
     '../models/AiMatters': {
       findById: async (id) => matters.get(Number(id)) || null,
       update: async () => {},
@@ -144,14 +145,24 @@ function carregar({ imagem, avaliacoes = null, furos = [] }) {
     module, exports: module.exports, process, console, setTimeout, clearTimeout, setInterval, setImmediate, Date, URL,
     require: (id) => (Object.hasOwn(mocks, id) ? mocks[id] : realRequire(id)),
   }, { filename });
-  return { service: module.exports, tabelas, eventos };
+  return { service: module.exports, tabelas, eventos, matters };
 }
 
-function naFila(tabelas, n) {
+const MANCHETES = [
+  'Pastora condenada pelo 8 de janeiro deixa a prisão após dois anos',
+  'Congresso recebe medida provisória que proíbe apostas esportivas',
+  'Cantor gospel anuncia turnê nacional com vinte shows',
+  'Polícia Federal prende suspeito de fraude em igreja no Pará',
+  'Papa Leão XIV recebe líderes evangélicos no Vaticano',
+  'Senado aprova aumento de penas para maus-tratos contra animais',
+];
+
+function naFila(tabelas, n, titulos = MANCHETES) {
   for (let i = 1; i <= n; i += 1) {
+    const titulo = titulos[i - 1];
     tabelas.furos_autopilot_itens.push({
-      id: i, user_id: 1, chave: `k${i}`, canal: 'noticias', titulo: `Pauta ${i}`, url: `https://ex.test/${i}`,
-      pauta: JSON.stringify({ titulo: `Pauta ${i}`, url: `https://ex.test/${i}` }), score: 50 - i, nota_ia: 90 - i,
+      id: i, user_id: 1, chave: `k${i}`, canal: 'noticias', titulo, url: `https://ex.test/${i}`,
+      pauta: JSON.stringify({ titulo, url: `https://ex.test/${i}` }), score: 50 - i, nota_ia: 90 - i,
       status: 'na_fila', tentativas: 0, created_at: new Date(), updated_at: new Date(),
     });
   }
@@ -269,4 +280,51 @@ test('painel: marcar Automatizar confirma e envia filtros, intervalo e página',
   } finally {
     window.close();
   }
+});
+
+test('não publica duas vezes o mesmo assunto, mesmo vindo de veículos diferentes', async () => {
+  const ctx = carregar({ imagem: () => esperar(5) });
+  naFila(ctx.tabelas, 3, [
+    'Fux suspende decisão de Dino e retoma ordem contra fake news sobre Nossa Senhora',
+    'Fux susta decisão de Dino sobre fake news de Nossa Senhora',
+    'Congresso recebe medida provisória que proíbe apostas esportivas',
+  ]);
+  await rodar(ctx.service, 15);
+  // Libera o intervalo duas vezes: a 2ª versão do mesmo fato não pode sair.
+  for (let i = 0; i < 2; i += 1) {
+    ctx.tabelas.furos_autopilot[0].proxima_postagem_at = new Date(Date.now() - 1000);
+    await rodar(ctx.service, 4);
+  }
+  const porStatus = Object.fromEntries(ctx.tabelas.furos_autopilot_itens.map((i) => [i.id, i.status]));
+  assert.equal(porStatus[1], 'publicada');
+  assert.equal(porStatus[2], 'descartada');
+  assert.match(ctx.tabelas.furos_autopilot_itens[1].erro, /não duplicar/);
+  assert.equal(porStatus[3], 'publicada');
+  assert.equal(ctx.eventos.publicadas.length, 2);
+});
+
+test('não republica matéria que já foi publicada (à mão ou por outro caminho)', async () => {
+  const ctx = carregar({ imagem: () => esperar(120) });
+  naFila(ctx.tabelas, 1);
+  await rodar(ctx.service, 3);
+  assert.equal(ctx.tabelas.furos_autopilot_itens[0].status, 'gerando_imagem');
+  // Enquanto gerava a imagem, o editor publicou a mesma matéria à mão.
+  for (const m of ctx.matters.values()) m.status = 'publicado';
+  await rodar(ctx.service, 10);
+  assert.equal(ctx.eventos.publicadas.length, 0);
+  assert.equal(ctx.tabelas.furos_autopilot_itens[0].status, 'descartada');
+  // O intervalo não foi gasto com a duplicata.
+  assert.equal(ctx.tabelas.furos_autopilot[0].proxima_postagem_at, null);
+});
+
+test('não publica assunto que a conta já publicou por outro caminho', async () => {
+  const ctx = carregar({ imagem: () => esperar(5) });
+  ctx.tabelas.ai_matters.push({
+    id: 99, user_id: 1, status: 'publicado', updated_at: new Date(),
+    titulo: 'Pastora condenada pelo 8/1 deixa prisão após mais de dois anos', fonte_url: 'https://outro.test/x',
+  });
+  naFila(ctx.tabelas, 1);
+  await rodar(ctx.service, 12);
+  assert.equal(ctx.eventos.publicadas.length, 0);
+  assert.match(ctx.tabelas.furos_autopilot_itens[0].erro, /matéria #99/);
 });

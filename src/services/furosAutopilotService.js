@@ -541,6 +541,69 @@ async function ocuparVagasDeImagem() {
 
 // ---------------------------------------------------------------- publicação
 
+const JANELA_DUPLICATA_MS = 72 * 3_600_000;
+
+function tituloLimpo(texto) {
+  return String(texto || '').replace(/\[\[|\]\]|\*\*/g, '').replace(/\s+/g, ' ').trim();
+}
+
+function linkComparavel(url) {
+  const texto = String(url || '').trim().toLowerCase().split('#')[0].replace(/\/$/, '');
+  // No YouTube o vídeo está no "?v="; nos demais a query é só rastreio.
+  return /youtube\.com\/watch/.test(texto) ? texto : texto.split('?')[0];
+}
+
+/**
+ * Última barreira antes de postar: devolve o motivo para NÃO publicar
+ * (mesma matéria ou mesmo assunto já publicado nas últimas 72h — pelo
+ * piloto, à mão, pela Biblioteca ou pelo Feed) ou null.
+ * A checagem da publicação do sistema só avisa no log; aqui ela bloqueia.
+ */
+async function motivoDeDuplicata(userId, item, matter) {
+  if (String(matter.status) === 'publicado' || matter.publication_id) {
+    return `a matéria #${matter.id} já foi publicada`;
+  }
+  const mesmaMateria = await db(ITENS)
+    .where({ user_id: userId, matter_id: item.matter_id, status: 'publicada' })
+    .whereNot('id', item.id)
+    .first('id');
+  if (mesmaMateria) return `a matéria #${matter.id} já foi publicada pelo piloto`;
+
+  const { titulosParecidos, mesmoAssuntoNoticia } = require('./editorialGuidelinesFb');
+  const titulo = tituloLimpo(matter.titulo);
+  const parecido = (outro) => {
+    const t = tituloLimpo(outro);
+    return Boolean(titulo && t && (mesmoAssuntoNoticia(titulo, t) || titulosParecidos(titulo, t)));
+  };
+  const desde = new Date(Date.now() - JANELA_DUPLICATA_MS);
+
+  const doPiloto = await db(`${ITENS} as i`)
+    .leftJoin('ai_matters as m', 'm.id', 'i.matter_id')
+    .where('i.user_id', userId)
+    .where('i.status', 'publicada')
+    .where('i.publicado_at', '>=', desde)
+    .select('i.titulo', 'm.titulo as materia_titulo');
+  const repetidoPiloto = doPiloto.find((p) => parecido(p.materia_titulo) || parecido(p.titulo));
+  if (repetidoPiloto) return `mesmo assunto de “${tituloLimpo(repetidoPiloto.materia_titulo || repetidoPiloto.titulo)}”, já publicado pelo piloto`;
+
+  const publicadas = await db('ai_matters')
+    .where({ user_id: userId, status: 'publicado' })
+    .whereNot('id', matter.id)
+    .where('updated_at', '>=', desde)
+    .select('id', 'titulo', 'fonte_url');
+  const link = linkComparavel(matter.fonte_url);
+  const repetida = publicadas.find((m) => (link && linkComparavel(m.fonte_url) === link) || parecido(m.titulo));
+  if (repetida) return `mesmo assunto da matéria #${repetida.id} (“${tituloLimpo(repetida.titulo)}”), já publicada`;
+
+  const posts = await require('../models/Publications').historyForDedupe(userId, 300).catch(() => []);
+  const repetidoNaPagina = posts
+    .filter((p) => new Date(p.created_at).getTime() >= desde.getTime())
+    .map((p) => String(p.texto || p.legenda_sugerida || '').split(/\n+/).find((l) => l.trim()) || '')
+    .find((primeiraLinha) => parecido(primeiraLinha.slice(0, 300)));
+  if (repetidoNaPagina) return `a página já tem um post sobre isso: “${tituloLimpo(repetidoNaPagina).slice(0, 120)}”`;
+  return null;
+}
+
 async function tentarPublicar(row) {
   const userId = Number(row.user_id);
   if (publicando.has(userId)) return;
@@ -569,6 +632,13 @@ async function tentarPublicar(row) {
     const matter = await require('../models/AiMatters').findById(item.matter_id);
     if (!matter) throw new Error('a matéria foi apagada');
     if (!matter.imagem_path && !matter.imagem_url) throw new Error('a matéria está sem imagem');
+    const duplicata = await motivoDeDuplicata(userId, item, matter);
+    if (duplicata) {
+      // Não gasta o intervalo: a próxima pronta sai na volta seguinte.
+      console.info(`[furos-auto] user ${userId}: item ${item.id} não publicado (duplicata): ${duplicata}`);
+      await atualizarItem(item.id, { status: 'descartada', erro: corta(`Não publicada para não duplicar: ${duplicata}.`, 500) });
+      return;
+    }
     await require('./materiaIaService').publicarMateria(userId, item.matter_id);
     await atualizarItem(item.id, { status: 'publicada', publicado_at: new Date(), erro: null });
     await atualizarConfig(userId, { proxima_postagem_at: new Date(Date.now() + intervaloMs), ultimo_erro: null });
