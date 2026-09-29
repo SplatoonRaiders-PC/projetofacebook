@@ -12,6 +12,7 @@ const files = [
   'src/providers/claude/client.ts',
   'src/providers/claude/index.ts',
   'src/providers/claude/stream.ts',
+  'src/providers/deepseek/stream.ts',
   'src/providers/factory/base-api-client.ts',
   'src/providers/factory/types.ts',
   'src/providers/types.ts',
