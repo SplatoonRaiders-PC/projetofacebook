@@ -83,6 +83,7 @@ app.post('/login', async (req, res, next) => {
 
 app.get('/conteudo', requireAuth, require('./controllers/materiasIaController').listPage);
 app.get('/materia-manual', requireAuth, (_req, res) => renderPage(res, 'materia-manual', 'Matéria manual'));
+app.get('/piloto-automatico', requireAuth, (_req, res) => renderPage(res, 'piloto-automatico', 'Piloto automático'));
 app.get('/virais', requireAuth, require('./controllers/viraisController').showPage);
 app.get('/conteudo/lote', requireAuth, require('./controllers/materiasIaController').showLotePage);
 app.get('/viralizar', requireAuth, (_req, res) => res.redirect('/virais'));

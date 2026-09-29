@@ -137,6 +137,7 @@ function carregar({ imagem, avaliacoes = null, furos = [] }) {
       ranquearPautasParaPublico: async () => avaliacoes || [],
     },
     './newsResearch': { titulosSimilares: (a, b) => a === b },
+    './facebookPageResolver': { resolvePageForUser: async () => ({ id: 7 }), defaultPageForUser: async () => ({ id: 7 }) },
   };
   const filename = path.resolve(__dirname, '../src/services/furosAutopilotService.js');
   const realRequire = createRequire(filename);
@@ -327,4 +328,57 @@ test('não publica assunto que a conta já publicou por outro caminho', async ()
   await rodar(ctx.service, 12);
   assert.equal(ctx.eventos.publicadas.length, 0);
   assert.match(ctx.tabelas.furos_autopilot_itens[0].erro, /matéria #99/);
+});
+
+test('pausar guarda fila e configuração e não publica; retomar volta a publicar', async () => {
+  const ctx = carregar({ imagem: () => esperar(5) });
+  naFila(ctx.tabelas, 1);
+  const pausado = await ctx.service.pausar(1);
+  assert.equal(pausado.config.ativo, false);
+  assert.equal(pausado.config.existe, true);
+  assert.ok(pausado.config.pausado_at);
+  await rodar(ctx.service, 8);
+  assert.equal(ctx.eventos.publicadas.length, 0);
+  assert.equal(ctx.tabelas.furos_autopilot_itens[0].status, 'na_fila');
+  assert.equal(ctx.tabelas.furos_autopilot[0].intervalo_minutos, 10);
+
+  const retomado = await ctx.service.retomar(1);
+  assert.equal(retomado.config.ativo, true);
+  assert.equal(retomado.config.pausado_at, null);
+  await rodar(ctx.service, 10);
+  assert.equal(ctx.eventos.publicadas.length, 1);
+});
+
+test('página Piloto automático mostra pausado e retoma com confirmação', async () => {
+  const { JSDOM } = require('jsdom');
+  const html = fs.readFileSync(path.resolve(__dirname, '../public/views/piloto-automatico.ejs'), 'utf8');
+  const dom = new JSDOM(html, { runScripts: 'outside-only', url: 'https://example.test/piloto-automatico' });
+  const { window } = dom;
+  const chamadas = [];
+  window.confirm = () => true;
+  const status = (ativo) => ({
+    config: { existe: true, ativo, pausado_at: ativo ? null : new Date().toISOString(), intervalo_minutos: 10, limite_dia: 40 },
+    contagens: { pronta: 1 }, publicadasHoje: 3, maxImagens: 2,
+    itens: [{ id: 1, canal: 'youtube', titulo: 'Pastor reage', url: 'https://x.test', status: 'pronta', nota_ia: 70, imagem_ia: true }],
+  });
+  window.fetch = async (url, options = {}) => {
+    chamadas.push(`${options.method || 'GET'} ${url}`);
+    return { ok: true, status: 200, json: async () => status(url.endsWith('/retomar')) };
+  };
+  try {
+    window.eval(fs.readFileSync(path.resolve(__dirname, '../public/js/piloto-automatico.js'), 'utf8'));
+    await esperar(20);
+    const doc = window.document;
+    assert.equal(doc.getElementById('piloto-titulo').textContent, 'Pausado');
+    assert.equal(doc.getElementById('piloto-retomar').hidden, false);
+    assert.equal(doc.getElementById('piloto-pausar').hidden, true);
+    assert.equal(doc.getElementById('piloto-n-hoje').textContent, '3/40');
+    doc.getElementById('piloto-retomar').click();
+    await esperar(20);
+    assert.ok(chamadas.includes('POST /api/materias-ia/chat-extras/furos/auto/retomar'));
+    assert.equal(doc.getElementById('piloto-titulo').textContent, 'Ligado');
+    assert.equal(doc.getElementById('piloto-pausar').hidden, false);
+  } finally {
+    window.close();
+  }
 });

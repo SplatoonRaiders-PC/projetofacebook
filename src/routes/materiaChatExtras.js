@@ -584,6 +584,12 @@ router.get('/furos/auto', (req, res, next) =>
 router.put('/furos/auto', (req, res, next) =>
   responderAuto(res, next, require('../services/furosAutopilotService').salvarConfig(req.session.userId, req.body || {})));
 
+router.post('/furos/auto/pausar', (req, res, next) =>
+  responderAuto(res, next, require('../services/furosAutopilotService').pausar(req.session.userId)));
+
+router.post('/furos/auto/retomar', (req, res, next) =>
+  responderAuto(res, next, require('../services/furosAutopilotService').retomar(req.session.userId)));
+
 router.post('/furos/auto/escanear', (req, res, next) =>
   responderAuto(res, next, require('../services/furosAutopilotService').escanearAgora(req.session.userId)));
 

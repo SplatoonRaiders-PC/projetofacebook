@@ -22,6 +22,7 @@
     escanear: $('furos-auto-escanear'),
     resumo: $('furos-auto-resumo'),
     itens: $('furos-auto-itens'),
+    chip: $('piloto-chip'),
   };
 
   const ETAPAS = {
@@ -101,8 +102,21 @@
     el.resumo.dataset.tipo = tipo;
   }
 
+  function renderChip(status) {
+    if (!el.chip) return;
+    const { config } = status;
+    el.chip.hidden = !config.existe;
+    el.chip.classList.toggle('is-ligado', Boolean(config.ativo));
+    el.chip.classList.toggle('is-pausado', !config.ativo);
+    el.chip.textContent = config.ativo ? 'Piloto ligado' : 'Piloto pausado';
+    el.chip.title = config.ativo
+      ? 'Piloto automático ligado: roda no servidor mesmo com o navegador fechado. Clique para acompanhar.'
+      : 'Piloto automático pausado. Clique para acompanhar ou retomar.';
+  }
+
   function render(status) {
     ultimoStatus = status;
+    renderChip(status);
     const { config, contagens = {}, publicadasHoje = 0 } = status;
     el.ativo.checked = Boolean(config.ativo);
     el.intervalo.value = String(config.intervalo_minutos || 10);
@@ -116,7 +130,10 @@
     secao.classList.toggle('is-ativo', Boolean(config.ativo));
 
     if (!config.ativo) {
-      setResumo(publicadasHoje ? `Desligado · ${publicadasHoje} publicada(s) hoje.` : 'Desligado. Marque “Automatizar” para a IA trabalhar sozinha.');
+      const desde = config.pausado_at ? ` desde ${new Date(config.pausado_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}` : '';
+      setResumo(config.existe
+        ? `Pausado${desde} · ${publicadasHoje} publicada(s) hoje. A fila e a configuração estão guardadas; marque “Automatizar” para retomar.`
+        : 'Desligado. Marque “Automatizar” para a IA trabalhar sozinha.', config.existe ? 'aviso' : '');
     } else {
       const imagens = (contagens.gerando_imagem || 0);
       const partes = [
@@ -228,8 +245,28 @@
       el.ativo.checked = false;
       return;
     }
-    salvar(el.ativo.checked);
+    if (!el.ativo.checked) {
+      pausar();
+      return;
+    }
+    salvar(true);
   });
+
+  async function pausar() {
+    if (!confirm('Pausar o piloto?\n\nNada novo será publicado até você retomar. A fila e a configuração ficam guardadas.')) {
+      el.ativo.checked = true;
+      return;
+    }
+    el.ativo.disabled = true;
+    try {
+      render(await api(`${API}/pausar`, { method: 'POST' }));
+    } catch (err) {
+      el.ativo.checked = true;
+      setResumo(err.message, 'erro');
+    } finally {
+      el.ativo.disabled = false;
+    }
+  }
   el.salvar.addEventListener('click', () => salvar(el.ativo.checked));
   el.escanear.addEventListener('click', async () => {
     el.escanear.disabled = true;
@@ -242,6 +279,19 @@
       el.escanear.disabled = false;
     }
   });
+
+  async function atualizarChip() {
+    if (!dialog.hidden) return;
+    try {
+      renderChip(await api(API));
+    } catch {
+      // indicador é só informativo
+    }
+  }
+  atualizarChip();
+  setInterval(() => {
+    if (!document.hidden) atualizarChip();
+  }, 60_000);
 
   // Atualiza enquanto o painel do Furos estiver aberto.
   new MutationObserver(() => {

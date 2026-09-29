@@ -105,7 +105,9 @@ async function atualizarConfig(userId, dados) {
 
 function formatarConfig(row) {
   return {
+    existe: Boolean(row),
     ativo: Boolean(row?.ativo),
+    pausado_at: row?.pausado_at || null,
     nichos: parseJson(row?.nichos, ['auto']),
     canais: parseJson(row?.canais, ['noticias', 'youtube', 'instagram', 'facebook']),
     horas: Number(row?.horas) || 24,
@@ -158,7 +160,9 @@ async function salvarConfig(userId, entrada = {}) {
   if (ativo && !atual?.ativo) {
     dados.ultimo_scan_at = null;
     dados.proxima_postagem_at = new Date();
+    dados.pausado_at = null;
   }
+  if (!ativo && atual?.ativo) dados.pausado_at = new Date();
   if (atual) await atualizarConfig(userId, dados);
   else await db(CONFIG).insert({ user_id: userId, ...dados });
   if (ativo) setImmediate(() => void tick());
@@ -209,6 +213,41 @@ async function statusPainel(userId) {
     maxImagens: MAX_IMAGENS,
     itens,
   };
+}
+
+/**
+ * Pausa sem apagar nada: configuração e fila ficam. O que já estava sendo
+ * escrito ou gerando imagem termina, mas nada é publicado até retomar.
+ */
+async function pausar(userId) {
+  const row = await db(CONFIG).where({ user_id: userId }).first();
+  if (!row) throw erro(400, 'O piloto automático ainda não foi configurado.');
+  if (row.ativo) await atualizarConfig(userId, { ativo: false, pausado_at: new Date() });
+  return statusPainel(userId);
+}
+
+/** Retoma com a configuração salva: varre na hora e publica a próxima pronta. */
+async function retomar(userId) {
+  const row = await db(CONFIG).where({ user_id: userId }).first();
+  if (!row) throw erro(400, 'Configure o piloto automático no Furos do dia antes de ligar.');
+  const { resolvePageForUser, defaultPageForUser } = require('./facebookPageResolver');
+  const page = row.facebook_page_id
+    ? await resolvePageForUser(userId, row.facebook_page_id)
+    : await defaultPageForUser(userId);
+  if (!page) throw erro(400, 'A página do piloto não está mais disponível. Escolha outra no Furos do dia.');
+  if (!row.ativo) {
+    const proxima = row.proxima_postagem_at ? new Date(row.proxima_postagem_at) : null;
+    await atualizarConfig(userId, {
+      ativo: true,
+      pausado_at: null,
+      facebook_page_id: page.id,
+      ultimo_scan_at: null,
+      ultimo_erro: null,
+      proxima_postagem_at: proxima && proxima > new Date() ? proxima : new Date(),
+    });
+    setImmediate(() => void tick());
+  }
+  return statusPainel(userId);
 }
 
 async function escanearAgora(userId) {
@@ -732,6 +771,8 @@ module.exports = {
   MAX_IMAGENS,
   salvarConfig,
   statusPainel,
+  pausar,
+  retomar,
   escanearAgora,
   descartarItem,
   iniciar,

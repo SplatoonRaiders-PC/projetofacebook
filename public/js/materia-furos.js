@@ -472,4 +472,7 @@
       ok ? 'ok' : 'erro'
     );
   });
+
+  // /materia-manual?furos=1 (link da página Piloto automático) abre o painel.
+  if (new URLSearchParams(location.search).get('furos') === '1') abrir();
 })();
