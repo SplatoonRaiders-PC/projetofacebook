@@ -7,7 +7,8 @@ const db = require('../config/db');
  * Com "Automatizar" ligado, sem o editor escolher nada:
  *   1. a cada 5 min varre as fontes (nichos + Notícias/YouTube/Instagram/Facebook);
  *   2. a IA avalia as pautas novas e só as melhores entram na fila;
- *   3. escreve a matéria (notícia pelo gerador de furos; vídeo/post pelo chat);
+ *   3. escreve a matéria pelo mesmo caminho do chat do /materia-manual e com
+ *      o modelo escolhido lá (notícia ilegível cai no redator de furos);
  *   4. gera a imagem com IA (ChatGPT), no máximo 2 ao mesmo tempo no servidor;
  *   5. publica na página a cada N minutos (intervalo do editor).
  *
@@ -25,7 +26,11 @@ const MAX_IMAGENS = 2;
 /** Matérias escritas à frente da publicação (escritas + em imagem + prontas). */
 const BUFFER_ALVO = 3;
 const MAX_FILA = 10;
-const NOTA_MINIMA_IA = 35;
+/** Aprovação normal: potencial da IA OU nota combinada (Furos + IA). */
+const NOTA_MINIMA_IA = 30;
+const NOTA_COMBINADA_MINIMA = 40;
+/** Sem nada no caminho: as melhores entram se a IA não as zerou. */
+const NOTA_MINIMA_FOME = 15;
 const TENTATIVAS_IMAGEM = 2;
 const LIMITE_ESCRITA_MS = 15 * 60_000;
 const FILA_VELHA_MS = 8 * 3_600_000;
@@ -119,7 +124,12 @@ function formatarConfig(row) {
     ultimo_scan_at: row?.ultimo_scan_at || null,
     proxima_postagem_at: row?.proxima_postagem_at || null,
     ultimo_erro: row?.ultimo_erro || null,
+    ultimo_scan_resumo: row?.ultimo_scan_resumo || null,
   };
+}
+
+async function registrarResumo(userId, texto) {
+  await atualizarConfig(userId, { ultimo_scan_resumo: corta(texto, 500) }).catch(() => {});
 }
 
 async function salvarConfig(userId, entrada = {}) {
@@ -175,6 +185,7 @@ async function statusPainel(userId) {
   let contagens = {};
   let itens = [];
   let publicadasHoje = 0;
+  let foraDaFila = [];
   try {
     const linhas = await db(ITENS)
       .where({ user_id: userId })
@@ -200,8 +211,22 @@ async function statusPainel(userId) {
         'i.erro', 'i.matter_id', 'i.imagem_ia', 'i.publicado_at', 'i.updated_at',
         'm.titulo as materia_titulo', 'm.imagem_url as materia_imagem'
       );
+    // O que a IA deixou de fora nas últimas 24h, com a nota e o motivo.
+    foraDaFila = await db(ITENS)
+      .where({ user_id: userId, status: 'descartada' })
+      .where('updated_at', '>=', new Date(Date.now() - 24 * 3_600_000))
+      .orderBy('updated_at', 'desc')
+      .limit(15)
+      .select('id', 'canal', 'titulo', 'url', 'nota_ia', 'motivo', 'erro', 'updated_at');
   } catch (err) {
     if (!/doesn't exist|no such table/i.test(String(err.message))) throw err;
+  }
+  let modeloNome = 'redator padrão do sistema';
+  try {
+    const modeloEfetivo = await modeloDoPiloto(row || {});
+    if (modeloEfetivo) modeloNome = require('./materiaModelosService').nomeModeloHumano(modeloEfetivo);
+  } catch {
+    // mantém o rótulo padrão
   }
   const proximoScan = config.ultimo_scan_at ? new Date(new Date(config.ultimo_scan_at).getTime() + SCAN_MS) : null;
   return {
@@ -211,7 +236,9 @@ async function statusPainel(userId) {
     proximoScan,
     escaneandoAgora: escaneando.has(Number(userId)),
     maxImagens: MAX_IMAGENS,
+    modeloNome,
     itens,
+    foraDaFila,
   };
 }
 
@@ -250,6 +277,18 @@ async function retomar(userId) {
   return statusPainel(userId);
 }
 
+/** O editor trocou o modelo no chat do /materia-manual: o piloto acompanha. */
+async function salvarModelo(userId, modelo) {
+  const row = await db(CONFIG).where({ user_id: userId }).first();
+  if (!row) throw erro(400, 'O piloto automático ainda não foi configurado.');
+  let final = corta(modelo, 120);
+  if (final && require('./deepseekService').usarTokenFree('conversa')) {
+    final = await require('./materiaModelosService').resolverModelo(final, { estrito: true });
+  }
+  await atualizarConfig(userId, { modelo: final });
+  return statusPainel(userId);
+}
+
 async function escanearAgora(userId) {
   const row = await db(CONFIG).where({ user_id: userId }).first();
   if (!row) throw erro(400, 'Salve a configuração do piloto automático antes.');
@@ -264,6 +303,23 @@ async function descartarItem(userId, itemId) {
     throw erro(409, 'Esta pauta já está sendo processada ou foi publicada.');
   }
   await atualizarItem(item.id, { status: 'descartada', erro: 'Retirada da fila pelo editor.' });
+  return statusPainel(userId);
+}
+
+/**
+ * Tenta de novo um item que falhou (ou que a IA deixou de fora): volta para a
+ * etapa em que parou — sem matéria, reescreve; com matéria, refaz a imagem.
+ */
+async function refazerItem(userId, itemId) {
+  const item = await db(ITENS).where({ id: itemId, user_id: userId }).first();
+  if (!item) throw erro(404, 'Pauta não encontrada.');
+  if (!['erro', 'descartada'].includes(item.status)) throw erro(409, 'Esta pauta não falhou.');
+  await atualizarItem(item.id, {
+    status: item.matter_id ? 'aguardando_imagem' : 'na_fila',
+    erro: null,
+    tentativas: 0,
+  });
+  setImmediate(() => void tick());
   return statusPainel(userId);
 }
 
@@ -333,7 +389,7 @@ async function escanear(row, { forcar = false } = {}) {
       userId,
       nichos: config.nichos,
       horas: config.horas,
-      limite: 25,
+      limite: 40,
       canais: config.canais,
     });
 
@@ -373,7 +429,11 @@ async function escanear(row, { forcar = false } = {}) {
       if (!repetido) aceitosAgora.push(f.titulo);
       return !repetido;
     });
-    if (!novos.length) return;
+    const encontradas = (resultado.furos || []).length;
+    if (!novos.length) {
+      await registrarResumo(userId, `${encontradas} pautas encontradas; nenhuma nova (já avaliadas antes ou assunto já publicado).`);
+      return;
+    }
 
     const avaliacoes = await avaliarComIa(userId, config.facebook_page_id, novos);
     const avaliados = novos.map((f, i) => {
@@ -381,11 +441,29 @@ async function escanear(row, { forcar = false } = {}) {
       const nota = a
         ? Math.round(0.35 * f.score + 0.45 * a.potencial + 0.2 * a.afinidade)
         : f.score;
-      const aprovado = a ? a.potencial >= NOTA_MINIMA_IA : f.score >= 20;
-      return { furo: f, nota, aprovado, motivo: a?.motivo || (f.motivos || []).join(', ') };
+      const aprovado = a ? a.potencial >= NOTA_MINIMA_IA || nota >= NOTA_COMBINADA_MINIMA : f.score >= 15;
+      return { furo: f, nota, potencial: a ? a.potencial : null, aprovado, motivo: a?.motivo || (f.motivos || []).join(', ') };
     });
-
     avaliados.sort((a, b) => b.nota - a.nota);
+
+    // Nada no caminho e nenhuma aprovada: a IA escolhe as melhores desta
+    // varredura (em vez de deixar a página parada), menos as que ela julgou
+    // sem valor editorial.
+    const noCaminho = await db(ITENS)
+      .where({ user_id: userId })
+      .whereIn('status', ['na_fila', ...EM_ANDAMENTO])
+      .count({ n: '*' })
+      .first();
+    if (!(Number(noCaminho?.n) || 0) && !avaliados.some((a) => a.aprovado)) {
+      avaliados
+        .filter((a) => a.potencial == null || a.potencial >= NOTA_MINIMA_FOME)
+        .slice(0, 3)
+        .forEach((a) => {
+          a.aprovado = true;
+          a.motivo = `Melhor desta varredura. ${a.motivo || ''}`.trim();
+        });
+    }
+
     let entram = 0;
     for (const { furo, nota, aprovado, motivo } of avaliados) {
       const entra = aprovado && entram < Math.max(vagas, forcar ? 3 : 0);
@@ -408,6 +486,12 @@ async function escanear(row, { forcar = false } = {}) {
         .onConflict(['user_id', 'chave'])
         .ignore();
     }
+    const notas = avaliados.slice(0, 6).map((a) => a.nota).join(', ');
+    await registrarResumo(
+      userId,
+      `${encontradas} pautas encontradas, ${novos.length} novas, ${entram} aprovadas pela IA` +
+        (notas ? ` (melhores notas: ${notas})` : '') + '.'
+    );
     console.info(`[furos-auto] user ${userId}: ${novos.length} pautas novas, ${entram} na fila`);
   } catch (err) {
     console.warn(`[furos-auto] varredura user ${userId}:`, err.message);
@@ -419,40 +503,110 @@ async function escanear(row, { forcar = false } = {}) {
 
 // ------------------------------------------------------------------- escrita
 
+/**
+ * Modelo que escreve: o mesmo escolhido no chat do /materia-manual (salvo
+ * no piloto). Sem o gateway, o redator padrão do sistema (null).
+ */
+async function modeloDoPiloto(row) {
+  if (!require('./deepseekService').usarTokenFree('conversa')) return null;
+  return require('./materiaModelosService').resolverModelo(row.modelo);
+}
+
+/** Mesmo caminho do "Criar matéria" do chat: ler o link, apurar e escrever. */
+async function escreverPeloChatDoPiloto({ userId, url, pageId, imagemUrl, modelo }) {
+  const { escreverPeloChat } = require('./materiaPorChat');
+  const { matterId } = await comLimite(
+    escreverPeloChat(
+      { chatService: require('./materiaChatService'), comModelo: require('./tokenFreeGatewayService').comModelo },
+      { userId, url, facebookPageId: pageId, imagemUrl, modelo }
+    ),
+    LIMITE_ESCRITA_MS,
+    'a escrita passou de 15 min'
+  );
+  return matterId;
+}
+
 async function escreverMateria(item, row) {
   const pauta = parseJson(item.pauta, {});
   const userId = Number(item.user_id);
   const pageId = row.facebook_page_id || null;
   const redeSocial = ['youtube', 'instagram', 'facebook'].includes(item.canal);
+  const modelo = await modeloDoPiloto(row);
 
   if (!redeSocial) {
-    const r = await comLimite(
-      require('./furosService').gerarFuro({ userId, pauta, facebookPageId: pageId }),
-      LIMITE_ESCRITA_MS,
-      'a escrita passou de 15 min'
-    );
-    return r.matterId;
+    const furosService = require('./furosService');
+    const { comModelo } = require('./tokenFreeGatewayService');
+    // O link do Google News não deixa ler a matéria: troca pelo do veículo.
+    let pautaFinal = pauta;
+    if (/news\.google\.com/i.test(String(pauta.url || item.url))) {
+      const direto = await furosService.linkDiretoPeloTitulo({ ...pauta, url: pauta.url || item.url }, []).catch(() => null);
+      if (direto?.url) pautaFinal = { ...pauta, url: direto.url, veiculo: direto.veiculo || pauta.veiculo };
+    }
+
+    // 1) Como o "Criar de um link" do chat, com o modelo escolhido lá.
+    if (modelo && pautaFinal.url && !/news\.google\.com/i.test(pautaFinal.url)) {
+      try {
+        const matterId = await escreverPeloChatDoPiloto({ userId, url: pautaFinal.url, pageId, imagemUrl: pautaFinal.imagem, modelo });
+        if (matterId) return matterId;
+      } catch (err) {
+        console.info(`[furos-auto] item ${item.id}: chat não escreveu (${err.message}); tentando o redator de furos`);
+      }
+    }
+
+    // 2) Redator de furos; 3) sem texto legível, apura pelo título.
+    return comModelo(modelo, async () => {
+      try {
+        const r = await comLimite(
+          furosService.gerarFuro({ userId, pauta: pautaFinal, facebookPageId: pageId }),
+          LIMITE_ESCRITA_MS,
+          'a escrita passou de 15 min'
+        );
+        return r.matterId;
+      } catch (err) {
+        if (!/texto suficiente|ler este link|extrair/i.test(String(err.message))) throw err;
+        console.info(`[furos-auto] item ${item.id}: fonte ilegível, apurando pelo título`);
+        return escreverPorApuracao(userId, pautaFinal, pageId);
+      }
+    });
   }
 
-  let modelo = null;
-  if (require('./deepseekService').usarTokenFree('conversa')) {
-    modelo = await require('./materiaModelosService').resolverModelo(row.modelo);
-  }
-  const { escreverPeloChat } = require('./materiaPorChat');
-  const { matterId } = await comLimite(
-    escreverPeloChat(
-      { chatService: require('./materiaChatService'), comModelo: require('./tokenFreeGatewayService').comModelo },
-      { userId, url: item.url, facebookPageId: pageId, imagemUrl: pauta.imagem, modelo }
-    ),
-    LIMITE_ESCRITA_MS,
-    'a escrita passou de 15 min'
-  );
+  const matterId = await escreverPeloChatDoPiloto({ userId, url: item.url, pageId, imagemUrl: pauta.imagem, modelo });
   if (pauta.bibliotecaPostId && matterId) {
     await require('../models/BibliotecaPosts')
       .update(Number(pauta.bibliotecaPostId), { status: 'rascunho', matter_id: matterId })
       .catch(() => {});
   }
   return matterId;
+}
+
+/**
+ * Plano B da notícia: pesquisa o fato pelo título (Google News e demais
+ * fontes) e escreve só com o que as fontes confirmarem. Sem fonte, falha.
+ */
+async function escreverPorApuracao(userId, pauta, pageId) {
+  const linkLegivel = pauta.url && !/news\.google\.com/i.test(pauta.url);
+  const r = await comLimite(
+    require('./materiaIaService').gerarMateriaManual({
+      userId,
+      informacoes: [
+        `Pauta: ${pauta.titulo}`,
+        pauta.resumo ? `Resumo: ${pauta.resumo}` : null,
+        pauta.veiculo ? `Noticiado por: ${pauta.veiculo}` : null,
+      ].filter(Boolean).join('\n'),
+      angulo: 'Matéria jornalística sobre este fato, usando só o que as fontes encontradas confirmam. Não invente nomes, números nem falas.',
+      facebookPageId: pageId,
+      imagemUrl: /^https?:\/\//i.test(String(pauta.imagem || '')) ? pauta.imagem : null,
+      pesquisarWeb: true,
+      palavrasChave: pauta.titulo,
+      periodo: '7d',
+      fonteBase: linkLegivel
+        ? { veiculo: pauta.veiculo, titulo: pauta.titulo, url: pauta.url, resumo: pauta.resumo }
+        : null,
+    }),
+    LIMITE_ESCRITA_MS,
+    'a apuração passou de 15 min'
+  );
+  return r?.matter?.id || null;
 }
 
 /** Escreve a próxima da fila enquanto houver espaço à frente da publicação. */
@@ -773,8 +927,10 @@ module.exports = {
   statusPainel,
   pausar,
   retomar,
+  salvarModelo,
   escanearAgora,
   descartarItem,
+  refazerItem,
   iniciar,
   tick,
   // exportados para testes

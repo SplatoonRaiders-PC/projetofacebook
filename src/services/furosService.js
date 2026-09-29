@@ -613,4 +613,5 @@ module.exports = {
   pontuarBomba,
   buscarFuros,
   gerarFuro,
+  linkDiretoPeloTitulo,
 };

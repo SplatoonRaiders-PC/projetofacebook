@@ -16,6 +16,10 @@
     itens: $('piloto-itens'),
     vazio: $('piloto-vazio'),
     atualizado: $('piloto-atualizado'),
+    varredura: $('piloto-varredura'),
+    fora: $('piloto-fora'),
+    foraN: $('piloto-fora-n'),
+    foraItens: $('piloto-fora-itens'),
   };
   if (!el.itens) return;
 
@@ -57,6 +61,47 @@
           : 'border-rose-500/40 bg-rose-500/10 text-rose-300'}`;
   }
 
+  function botao(texto, titulo, aoClicar, estilo = 'border-slate-700 text-slate-300 hover:border-emerald-500 hover:text-emerald-300') {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = `shrink-0 rounded-md border px-2 py-1 text-xs ${estilo}`;
+    b.title = titulo;
+    b.textContent = texto;
+    b.addEventListener('click', () => aoClicar(b));
+    return b;
+  }
+
+  function renderForaDaFila(lista) {
+    el.fora.classList.toggle('hidden', !lista.length);
+    el.foraN.textContent = lista.length ? `(${lista.length})` : '';
+    el.foraItens.replaceChildren();
+    for (const item of lista) {
+      const li = document.createElement('li');
+      li.className = 'flex items-center gap-3 rounded-xl border border-slate-800 bg-slate-950/60 p-3';
+      const corpo = document.createElement('div');
+      corpo.className = 'min-w-0 flex-1';
+      const link = document.createElement('a');
+      link.href = item.url;
+      link.target = '_blank';
+      link.rel = 'noopener';
+      link.className = 'block truncate text-sm text-slate-200 hover:underline';
+      link.textContent = item.titulo || item.url;
+      const meta = document.createElement('p');
+      meta.className = 'mt-0.5 truncate text-xs text-slate-500';
+      meta.textContent = [
+        CANAL[item.canal] || item.canal,
+        item.nota_ia != null ? `nota ${item.nota_ia}` : null,
+        item.erro,
+        item.motivo,
+      ].filter(Boolean).join(' · ');
+      meta.title = meta.textContent;
+      corpo.append(link, meta);
+      li.append(corpo, botao('Publicar mesmo assim', 'Coloca esta pauta na fila do piloto',
+        (b) => acao(`${API}/itens/${item.id}/refazer`, b)));
+      el.foraItens.append(li);
+    }
+  }
+
   function render(s) {
     const { config, contagens = {}, publicadasHoje = 0 } = s;
     const ligado = config.ativo;
@@ -65,17 +110,23 @@
     el.sub.textContent = ligado
       ? [
           `Publica a cada ${config.intervalo_minutos} min (até ${config.limite_dia} por dia)`,
+          s.modeloNome ? `escreve com ${s.modeloNome}` : null,
           config.proxima_postagem_at && new Date(config.proxima_postagem_at) > new Date()
             ? `próxima postagem às ${quando(config.proxima_postagem_at)}`
             : 'publica a próxima assim que ficar pronta',
           s.escaneandoAgora ? 'procurando pautas agora…' : s.proximoScan ? `próxima varredura às ${quando(s.proximoScan)}` : 'varrendo em instantes',
-        ].join(' · ')
+        ].filter(Boolean).join(' · ')
       : config.existe
         ? `Pausado${config.pausado_at ? ` desde ${quando(config.pausado_at, { comDia: true })}` : ''}. A fila e a configuração estão guardadas; nada é publicado até retomar.`
         : 'Ligue o “Automatizar” no Furos do dia para configurar nichos, fontes, intervalo e página.';
     el.pausar.hidden = !ligado;
     el.retomar.hidden = ligado || !config.existe;
     el.varrer.hidden = !ligado;
+    el.varredura.classList.toggle('hidden', !config.ultimo_scan_resumo);
+    el.varredura.textContent = config.ultimo_scan_resumo
+      ? `Última varredura${config.ultimo_scan_at ? ` (${quando(config.ultimo_scan_at)})` : ''}: ${config.ultimo_scan_resumo}`
+      : '';
+    renderForaDaFila(s.foraDaFila || []);
     if (config.ultimo_erro) aviso(`Último problema: ${config.ultimo_erro}`, 'aviso');
     else if (el.aviso.dataset.fixo !== '1') aviso('');
 
@@ -118,6 +169,9 @@
       selo.textContent = rotulo;
       li.append(corpo, selo);
 
+      if (item.status === 'erro') {
+        li.append(botao('Tentar de novo', 'Volta para a etapa em que parou', (b) => acao(`${API}/itens/${item.id}/refazer`, b)));
+      }
       if (['na_fila', 'aguardando_imagem', 'pronta', 'erro'].includes(item.status)) {
         const tirar = document.createElement('button');
         tirar.type = 'button';

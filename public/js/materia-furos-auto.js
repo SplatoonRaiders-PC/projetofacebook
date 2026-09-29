@@ -40,6 +40,9 @@
   let timer = null;
   let paginasCarregadas = false;
   let ultimoStatus = null;
+  // Os campos só são preenchidos ao abrir e depois de salvar: a atualização
+  // automática a cada 10 s desfazia o que o editor tinha acabado de escolher.
+  let formPreenchido = false;
 
   async function api(url, opts = {}) {
     const res = await fetch(url, {
@@ -110,22 +113,26 @@
     el.chip.classList.toggle('is-pausado', !config.ativo);
     el.chip.textContent = config.ativo ? 'Piloto ligado' : 'Piloto pausado';
     el.chip.title = config.ativo
-      ? 'Piloto automático ligado: roda no servidor mesmo com o navegador fechado. Clique para acompanhar.'
+      ? `Piloto automático ligado${status.modeloNome ? `, escrevendo com ${status.modeloNome}` : ''}: roda no servidor mesmo com o navegador fechado. Clique para acompanhar.`
       : 'Piloto automático pausado. Clique para acompanhar ou retomar.';
   }
 
-  function render(status) {
+  function render(status, { preencherForm = false } = {}) {
     ultimoStatus = status;
     renderChip(status);
     const { config, contagens = {}, publicadasHoje = 0 } = status;
     el.ativo.checked = Boolean(config.ativo);
-    el.intervalo.value = String(config.intervalo_minutos || 10);
-    el.limite.value = String(config.limite_dia || 40);
-    if (![...el.limite.options].some((o) => o.value === el.limite.value)) {
-      el.limite.append(new Option(String(config.limite_dia), String(config.limite_dia)));
-      el.limite.value = String(config.limite_dia);
+    if (!formPreenchido || preencherForm) {
+      formPreenchido = true;
+      el.intervalo.value = String(config.intervalo_minutos || 10);
+      el.limite.value = String(config.limite_dia || 40);
+      if (![...el.limite.options].some((o) => o.value === el.limite.value)) {
+        el.limite.append(new Option(String(config.limite_dia), String(config.limite_dia)));
+        el.limite.value = String(config.limite_dia);
+      }
+      el.foto.checked = config.foto_original_se_falhar !== false;
+      if (config.facebook_page_id) el.pagina.value = String(config.facebook_page_id);
     }
-    el.foto.checked = config.foto_original_se_falhar !== false;
     el.escanear.hidden = !config.ativo;
     secao.classList.toggle('is-ativo', Boolean(config.ativo));
 
@@ -138,6 +145,7 @@
       const imagens = (contagens.gerando_imagem || 0);
       const partes = [
         `Ligado · posta a cada ${config.intervalo_minutos} min`,
+        status.modeloNome ? `escreve com ${status.modeloNome}` : null,
         config.proxima_postagem_at && new Date(config.proxima_postagem_at) > new Date()
           ? `próxima postagem às ${hora(config.proxima_postagem_at)}`
           : 'publica a próxima assim que ficar pronta',
@@ -148,7 +156,12 @@
         `imagem ${imagens}/${status.maxImagens || 2} (+${contagens.aguardando_imagem || 0} aguardando)`,
         `prontas ${contagens.pronta || 0}`,
       ];
-      setResumo(partes.join(' · ') + (config.ultimo_erro ? `\nÚltimo problema: ${config.ultimo_erro}` : ''), config.ultimo_erro ? 'aviso' : 'ok');
+      setResumo(
+        partes.filter(Boolean).join(' · ') +
+          (config.ultimo_scan_resumo ? `\nÚltima varredura: ${config.ultimo_scan_resumo}` : '') +
+          (config.ultimo_erro ? `\nÚltimo problema: ${config.ultimo_erro}` : ''),
+        config.ultimo_erro ? 'aviso' : 'ok'
+      );
     }
 
     el.itens.replaceChildren();
@@ -178,7 +191,25 @@
       selo.textContent = rotulo;
       li.append(corpo, selo);
 
-      if (['na_fila', 'aguardando_imagem', 'pronta'].includes(item.status)) {
+      if (item.status === 'erro') {
+        const refazer = document.createElement('button');
+        refazer.type = 'button';
+        refazer.className = 'mia-furos-auto-tirar';
+        refazer.title = 'Tentar de novo';
+        refazer.setAttribute('aria-label', 'Tentar de novo');
+        refazer.textContent = '↻';
+        refazer.addEventListener('click', async () => {
+          refazer.disabled = true;
+          try {
+            render(await api(`${API}/itens/${item.id}/refazer`, { method: 'POST' }));
+          } catch (err) {
+            setResumo(err.message, 'erro');
+            refazer.disabled = false;
+          }
+        });
+        li.append(refazer);
+      }
+      if (['na_fila', 'aguardando_imagem', 'pronta', 'erro'].includes(item.status)) {
         const tirar = document.createElement('button');
         tirar.type = 'button';
         tirar.className = 'mia-furos-auto-tirar';
@@ -203,7 +234,7 @@
   async function atualizar() {
     try {
       const status = await api(API);
-      await carregarPaginas(status.config.facebook_page_id);
+      await carregarPaginas(null); // só as opções; o valor vem do formulário
       render(status);
     } catch (err) {
       setResumo(err.message, 'erro');
@@ -226,7 +257,7 @@
           modelo: document.getElementById('chat-ai-model')?.dataset.modelo || null,
         }),
       });
-      render(status);
+      render(status, { preencherForm: true });
       if (ativo) setTimeout(atualizar, 3000);
     } catch (err) {
       el.ativo.checked = Boolean(ultimoStatus?.config?.ativo);
@@ -280,10 +311,31 @@
     }
   });
 
+  let modeloVisto = null;
+  document.addEventListener('materia:modelo-alterado', async () => {
+    const modelo = document.getElementById('chat-ai-model')?.dataset.modelo || '';
+    if (modeloVisto === null) {
+      modeloVisto = modelo; // primeiro disparo = carregamento da página
+      return;
+    }
+    if (modelo === modeloVisto) return;
+    modeloVisto = modelo;
+    if (!ultimoStatus?.config?.existe) return;
+    try {
+      const status = await api(`${API}/modelo`, { method: 'PUT', body: JSON.stringify({ modelo: modelo || null }) });
+      renderChip(status);
+      if (!dialog.hidden) render(status);
+    } catch (err) {
+      if (!dialog.hidden) setResumo(`Não troquei o modelo do piloto: ${err.message}`, 'erro');
+    }
+  });
+
   async function atualizarChip() {
     if (!dialog.hidden) return;
     try {
-      renderChip(await api(API));
+      const status = await api(API);
+      ultimoStatus = status;
+      renderChip(status);
     } catch {
       // indicador é só informativo
     }
@@ -297,6 +349,7 @@
   new MutationObserver(() => {
     clearInterval(timer);
     if (!dialog.hidden) {
+      formPreenchido = false;
       atualizar();
       timer = setInterval(atualizar, 10_000);
     }

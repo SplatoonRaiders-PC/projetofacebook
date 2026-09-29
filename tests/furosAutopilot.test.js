@@ -89,7 +89,7 @@ function criarDb(tabelas) {
 
 const esperar = (ms) => new Promise((r) => setTimeout(r, ms));
 
-function carregar({ imagem, avaliacoes = null, furos = [] }) {
+function carregar({ imagem, avaliacoes = null, furos = [], gerarFuro = null, gateway = false }) {
   const tabelas = {
     furos_autopilot: [{ id: 1, user_id: 1, ativo: true, intervalo_minutos: 10, limite_dia: 40, facebook_page_id: 7,
       foto_original_se_falhar: true, ultimo_scan_at: new Date(), proxima_postagem_at: null, nichos: '["auto"]', canais: '["noticias"]', horas: 24 }],
@@ -103,7 +103,10 @@ function carregar({ imagem, avaliacoes = null, furos = [] }) {
     './furosService': {
       NICHOS: [{ id: 'igreja' }], CANAIS: ['noticias'],
       buscarFuros: async () => ({ furos }),
+      linkDiretoPeloTitulo: async () => null,
       gerarFuro: async ({ pauta }) => {
+        eventos.peloFuro = (eventos.peloFuro || 0) + 1;
+        if (gerarFuro) await gerarFuro(pauta);
         if (eventos.imagensJuntas > 0) eventos.escritasDuranteImagem += 1;
         await esperar(5);
         const id = matters.size + 1;
@@ -112,6 +115,12 @@ function carregar({ imagem, avaliacoes = null, furos = [] }) {
       },
     },
     './materiaPorChat': {
+      escreverPeloChat: async (_deps, { url, modelo }) => {
+        eventos.peloChat = [...(eventos.peloChat || []), { url, modelo }];
+        const id = matters.size + 1;
+        matters.set(id, { id, titulo: 'Escrita pelo chat', imagem_path: 'artes/foto.jpg' });
+        return { matterId: id, chatId: 1 };
+      },
       aplicarCapaChatgpt: async () => {
         eventos.imagensJuntas += 1;
         eventos.maxImagens = Math.max(eventos.maxImagens, eventos.imagensJuntas);
@@ -131,9 +140,21 @@ function carregar({ imagem, avaliacoes = null, furos = [] }) {
     './materiaIaService': {
       publicarMateria: async (_u, matterId) => { eventos.publicadas.push(matterId); return { postId: 'x' }; },
       marcarJaPublicados: async (_u, _p, lista) => lista,
+      gerarMateriaManual: async ({ informacoes }) => {
+        eventos.apuradas = (eventos.apuradas || 0) + 1;
+        const id = matters.size + 1;
+        matters.set(id, { id, titulo: informacoes.split(/\n/)[0], imagem_path: 'artes/foto.jpg' });
+        return { matter: { id } };
+      },
     },
+    './materiaModelosService': {
+      resolverModelo: async (m) => m || 'claude-sonnet-5',
+      nomeModeloHumano: (m) => (m === 'gpt-5.6' ? 'ChatGPT 5.6' : m),
+    },
+    './tokenFreeGatewayService': { comModelo: (_m, fn) => fn() },
+    './materiaChatService': {},
     './deepseekService': {
-      usarTokenFree: () => false,
+      usarTokenFree: () => gateway,
       ranquearPautasParaPublico: async () => avaliacoes || [],
     },
     './newsResearch': { titulosSimilares: (a, b) => a === b },
@@ -378,6 +399,102 @@ test('página Piloto automático mostra pausado e retoma com confirmação', asy
     assert.ok(chamadas.includes('POST /api/materias-ia/chat-extras/furos/auto/retomar'));
     assert.equal(doc.getElementById('piloto-titulo').textContent, 'Ligado');
     assert.equal(doc.getElementById('piloto-pausar').hidden, false);
+  } finally {
+    window.close();
+  }
+});
+
+test('fila vazia: as melhores da varredura entram mesmo com nota baixa, menos as zeradas', async () => {
+  const furos = [
+    { canal: 'noticias', titulo: 'Pastora condenada deixa a prisão após dois anos', url: 'https://ex.test/a', score: 30, resumo: '' },
+    { canal: 'noticias', titulo: 'Congresso recebe MP que proíbe apostas', url: 'https://ex.test/b', score: 25, resumo: '' },
+    { canal: 'noticias', titulo: 'Agenda de cultos da semana', url: 'https://ex.test/c', score: 10, resumo: '' },
+  ];
+  const avaliacoes = [
+    { id: 'p1', potencial: 25, afinidade: 20, motivo: 'fato novo' },
+    { id: 'p2', potencial: 22, afinidade: 10, motivo: 'política' },
+    { id: 'p3', potencial: 5, afinidade: 0, motivo: 'agenda' },
+  ];
+  const ctx = carregar({ imagem: () => esperar(5), avaliacoes, furos });
+  ctx.tabelas.furos_autopilot[0].ativo = false;
+  await ctx.service.escanearAgora(1);
+  await esperar(30);
+  const porTitulo = Object.fromEntries(ctx.tabelas.furos_autopilot_itens.map((i) => [i.titulo, i.status]));
+  assert.equal(porTitulo['Pastora condenada deixa a prisão após dois anos'], 'na_fila');
+  assert.equal(porTitulo['Congresso recebe MP que proíbe apostas'], 'na_fila');
+  assert.equal(porTitulo['Agenda de cultos da semana'], 'descartada');
+  assert.match(ctx.tabelas.furos_autopilot[0].ultimo_scan_resumo, /3 novas, 2 aprovadas/);
+});
+
+test('notícia do Google News que não dá para ler é escrita pela apuração do título', async () => {
+  const ctx = carregar({
+    imagem: () => esperar(5),
+    gerarFuro: async () => {
+      const err = new Error('Não consegui extrair texto suficiente da notícia/post original.');
+      err.status = 422;
+      throw err;
+    },
+  });
+  naFila(ctx.tabelas, 1);
+  ctx.tabelas.furos_autopilot_itens[0].url = 'https://news.google.com/rss/articles/CBMi';
+  await rodar(ctx.service, 10);
+  assert.equal(ctx.eventos.apuradas, 1);
+  assert.equal(ctx.eventos.publicadas.length, 1);
+});
+
+test('tentar de novo volta o item com erro para a fila', async () => {
+  const ctx = carregar({ imagem: () => esperar(5) });
+  naFila(ctx.tabelas, 1);
+  Object.assign(ctx.tabelas.furos_autopilot_itens[0], { status: 'erro', erro: 'Escrita: falhou' });
+  ctx.tabelas.furos_autopilot[0].ativo = false;
+  await ctx.service.refazerItem(1, 1);
+  assert.equal(ctx.tabelas.furos_autopilot_itens[0].status, 'na_fila');
+  assert.equal(ctx.tabelas.furos_autopilot_itens[0].erro, null);
+});
+
+test('notícia é escrita pelo caminho do chat com o modelo escolhido no /materia-manual', async () => {
+  const ctx = carregar({ imagem: () => esperar(5), gateway: true });
+  ctx.tabelas.furos_autopilot[0].modelo = 'gpt-5.6';
+  naFila(ctx.tabelas, 1);
+  await rodar(ctx.service, 8);
+  assert.deepEqual(ctx.eventos.peloChat, [{ url: 'https://ex.test/1', modelo: 'gpt-5.6' }]);
+  assert.equal(ctx.eventos.peloFuro || 0, 0);
+  assert.equal(ctx.eventos.publicadas.length, 1);
+  const status = await ctx.service.statusPainel(1);
+  assert.equal(status.modeloNome, 'ChatGPT 5.6');
+});
+
+test('trocar o modelo no chat atualiza o piloto', async () => {
+  const ctx = carregar({ imagem: () => esperar(5), gateway: true });
+  ctx.tabelas.furos_autopilot[0].ativo = false;
+  const status = await ctx.service.salvarModelo(1, 'gpt-5.6');
+  assert.equal(ctx.tabelas.furos_autopilot[0].modelo, 'gpt-5.6');
+  assert.equal(status.modeloNome, 'ChatGPT 5.6');
+});
+
+test('painel: mudar o modelo no chat avisa o piloto (e ignora o carregamento)', async () => {
+  const { JSDOM } = require('jsdom');
+  const html = fs.readFileSync(path.resolve(__dirname, '../public/views/materia-manual.ejs'), 'utf8');
+  const dom = new JSDOM(html, { runScripts: 'outside-only', url: 'https://example.test/materia-manual' });
+  const { window } = dom;
+  const trocas = [];
+  window.fetch = async (url, options = {}) => {
+    if (url.endsWith('/furos/auto/modelo')) trocas.push(JSON.parse(options.body).modelo);
+    return {
+      ok: true, status: 200,
+      json: async () => ({ config: { existe: true, ativo: true, intervalo_minutos: 10, limite_dia: 40 }, contagens: {}, itens: [], modeloNome: 'ChatGPT 5.6' }),
+    };
+  };
+  try {
+    window.eval(fs.readFileSync(path.resolve(__dirname, '../public/js/materia-furos-auto.js'), 'utf8'));
+    await esperar(20);
+    const seletor = window.document.getElementById('chat-ai-model');
+    seletor.dataset.modelo = 'claude-sonnet-5';
+    window.document.dispatchEvent(new window.CustomEvent('materia:modelo-alterado')); // carregamento
+    seletor.dataset.modelo = 'gpt-5.6';
+    window.document.dispatchEvent(new window.CustomEvent('materia:modelo-alterado')); // editor trocou
+    await esperar(20);
+    assert.deepEqual(trocas, ['gpt-5.6']);
   } finally {
     window.close();
   }

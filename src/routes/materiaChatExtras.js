@@ -584,6 +584,9 @@ router.get('/furos/auto', (req, res, next) =>
 router.put('/furos/auto', (req, res, next) =>
   responderAuto(res, next, require('../services/furosAutopilotService').salvarConfig(req.session.userId, req.body || {})));
 
+router.put('/furos/auto/modelo', (req, res, next) =>
+  responderAuto(res, next, require('../services/furosAutopilotService').salvarModelo(req.session.userId, req.body?.modelo)));
+
 router.post('/furos/auto/pausar', (req, res, next) =>
   responderAuto(res, next, require('../services/furosAutopilotService').pausar(req.session.userId)));
 
@@ -592,6 +595,9 @@ router.post('/furos/auto/retomar', (req, res, next) =>
 
 router.post('/furos/auto/escanear', (req, res, next) =>
   responderAuto(res, next, require('../services/furosAutopilotService').escanearAgora(req.session.userId)));
+
+router.post('/furos/auto/itens/:id/refazer', (req, res, next) =>
+  responderAuto(res, next, require('../services/furosAutopilotService').refazerItem(req.session.userId, Number(req.params.id))));
 
 router.post('/furos/auto/itens/:id/descartar', (req, res, next) =>
   responderAuto(res, next, require('../services/furosAutopilotService').descartarItem(req.session.userId, Number(req.params.id))));
