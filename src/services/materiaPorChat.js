@@ -97,25 +97,39 @@ function comLimite(promise, ms, mensagem) {
   ]).finally(() => clearTimeout(timer));
 }
 
-/** Refaz a capa com o ChatGPT a partir da foto da matéria (até 8 min). */
-async function aplicarCapaChatgpt({ userId, matterId, thumbnail }) {
+/** Ilustração sem foto de referência: simbólica e sem pessoas reais. */
+function promptCapaSimbolica(titulo) {
+  return [
+    `Crie uma ilustração editorial original e simbólica para a notícia: "${String(titulo || '').replace(/\[\[|\]\]|\*\*/g, '').trim()}".`,
+    'Represente o tema com objetos, lugares e símbolos. Não represente pessoas reais identificáveis nem invente um acontecimento.',
+    'Não inclua texto, letras, logotipos ou marcas d’água.',
+    'Composição vertical exata 4:5 (1080 × 1350 pixels), fotorrealista e adequada ao feed do Facebook.',
+  ].join('\n\n');
+}
+
+/**
+ * Refaz a capa com o ChatGPT a partir da foto da matéria (até 8 min).
+ * Sem foto de referência, `permitirSimbolica` pede uma ilustração simbólica.
+ */
+async function aplicarCapaChatgpt({ userId, matterId, thumbnail, permitirSimbolica = false }) {
   const AiMatters = require('../models/AiMatters');
   const matter = await AiMatters.findById(matterId);
   if (!matter) throw new Error('matéria não encontrada');
   let fonte = String(matter.imagem_fonte_url || '').trim();
   if (!fonte || /\/media\/artes\//i.test(fonte)) fonte = thumbnail && /^https?:\/\//i.test(thumbnail) ? thumbnail : '';
-  if (!fonte) throw new Error('não há foto de referência para o ChatGPT');
+  if (!fonte && !permitirSimbolica) throw new Error('não há foto de referência para o ChatGPT');
+  const simbolica = !fonte;
 
   const chatgptImageService = require('./chatgptImageService');
   const { storeMatterSourceImage, composeMatterArtwork } = require('./matterArtworkService');
   const gerada = await comLimite(
     chatgptImageService.gerarImagem({
-      sourceUrl: fonte,
-      prompt: promptCapaIa(matter.titulo),
+      sourceUrl: fonte || null,
+      prompt: simbolica ? promptCapaSimbolica(matter.titulo) : promptCapaIa(matter.titulo),
       titulo: matter.titulo || '',
       materia: matter.materia || '',
       recoveryKey: `${userId}:${matterId}`,
-      modo: 'referencia',
+      modo: simbolica ? 'simbolica' : 'referencia',
     }),
     8 * 60 * 1000,
     'o ChatGPT demorou mais de 8 min'

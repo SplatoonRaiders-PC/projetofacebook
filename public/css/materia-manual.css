@@ -550,3 +550,51 @@ body.mia-furos-aberto { overflow: hidden; }
 .mia-manual-claude .mia-furo-canal.is-youtube { background: rgb(239 68 68 / 16%); color: #fca5a5; }
 .mia-manual-claude .mia-furo-canal.is-instagram { background: rgb(236 72 153 / 16%); color: #f9a8d4; }
 .mia-manual-claude .mia-furo-canal.is-facebook { background: rgb(59 130 246 / 16%); color: #93c5fd; }
+
+/* Furos do dia — piloto automático */
+.mia-manual-claude .mia-furos-auto {
+  display: grid; gap: .6rem; margin: .2rem 0 .4rem; padding: .75rem .85rem;
+  border: 1px solid var(--mia-chat-border); border-radius: .9rem; background: rgb(255 255 255 / 2.5%);
+}
+.mia-manual-claude .mia-furos-auto.is-ativo { border-color: rgb(52 211 153 / 45%); background: rgb(16 185 129 / 6%); }
+.mia-manual-claude .mia-furos-auto-toggle { display: flex; align-items: flex-start; gap: .6rem; cursor: pointer; }
+.mia-manual-claude .mia-furos-auto-toggle input { width: 1.1rem; height: 1.1rem; margin-top: .15rem; accent-color: #10b981; }
+.mia-manual-claude .mia-furos-auto-toggle strong { display: block; font-size: .86rem; color: var(--mia-chat-text); }
+.mia-manual-claude .mia-furos-auto-toggle small { display: block; margin-top: .1rem; color: var(--mia-chat-muted); font-size: .72rem; line-height: 1.45; }
+.mia-manual-claude .mia-furos-auto-campos { display: flex; flex-wrap: wrap; align-items: flex-end; gap: .55rem .75rem; }
+.mia-manual-claude .mia-furos-auto-campos label > span { display: block; margin-bottom: .2rem; color: var(--mia-chat-muted); font-size: .68rem; font-weight: 600; }
+.mia-manual-claude .mia-furos-auto-campos select {
+  padding: .4rem .55rem; border: 1px solid var(--mia-chat-border); border-radius: .55rem;
+  background: rgb(255 255 255 / 3%); color: var(--mia-chat-text); font-size: .76rem; max-width: 14rem;
+}
+.mia-manual-claude .mia-furos-auto-check { display: flex; align-items: center; gap: .4rem; font-size: .72rem; color: var(--mia-chat-muted); }
+.mia-manual-claude .mia-furos-auto-check span { margin: 0 !important; font-weight: 400 !important; }
+.mia-manual-claude .mia-furos-auto-check input { accent-color: #10b981; }
+.mia-manual-claude .mia-furos-auto-botoes { display: flex; gap: .4rem; margin-left: auto; }
+.mia-manual-claude .mia-furos-auto-botoes [hidden] { display: none; }
+.mia-manual-claude .mia-furos-auto-resumo { margin: 0; white-space: pre-line; font-size: .74rem; line-height: 1.5; color: var(--mia-chat-muted); }
+.mia-manual-claude .mia-furos-auto-resumo[data-tipo="ok"] { color: #6ee7b7; }
+.mia-manual-claude .mia-furos-auto-resumo[data-tipo="aviso"] { color: #fcd34d; }
+.mia-manual-claude .mia-furos-auto-resumo[data-tipo="erro"] { color: #fda4af; }
+.mia-manual-claude .mia-furos-auto-itens { margin: 0; padding: 0; list-style: none; display: grid; gap: .3rem; max-height: 14rem; overflow-y: auto; }
+.mia-manual-claude .mia-furos-auto-itens:empty { display: none; }
+.mia-manual-claude .mia-furos-auto-item {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: .5rem;
+  padding: .4rem .55rem; border-radius: .55rem; background: rgb(255 255 255 / 3%);
+}
+.mia-manual-claude .mia-furos-auto-item a { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .76rem; color: var(--mia-chat-text); text-decoration: none; }
+.mia-manual-claude .mia-furos-auto-item a:hover { text-decoration: underline; }
+.mia-manual-claude .mia-furos-auto-item small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .66rem; color: var(--mia-chat-muted); }
+.mia-manual-claude .mia-furos-auto-selo { padding: .15rem .45rem; border-radius: 999px; font-size: .64rem; font-weight: 700; white-space: nowrap; background: rgb(148 163 184 / 16%); color: #cbd5e1; }
+.mia-manual-claude .mia-furos-auto-item.is-andamento .mia-furos-auto-selo { background: rgb(56 189 248 / 15%); color: #7dd3fc; }
+.mia-manual-claude .mia-furos-auto-item.is-pronta .mia-furos-auto-selo { background: rgb(251 191 36 / 14%); color: #fcd34d; }
+.mia-manual-claude .mia-furos-auto-item.is-publicada .mia-furos-auto-selo { background: rgb(16 185 129 / 16%); color: #6ee7b7; }
+.mia-manual-claude .mia-furos-auto-item.is-erro .mia-furos-auto-selo { background: rgb(244 63 94 / 15%); color: #fda4af; }
+.mia-manual-claude .mia-furos-auto-tirar {
+  width: 1.4rem; height: 1.4rem; border: 1px solid var(--mia-chat-border); border-radius: .4rem;
+  background: transparent; color: var(--mia-chat-muted); cursor: pointer; line-height: 1;
+}
+.mia-manual-claude .mia-furos-auto-tirar:hover { color: #fda4af; border-color: rgb(244 63 94 / 40%); }
+@media (max-width: 640px) {
+  .mia-manual-claude .mia-furos-auto-botoes { margin-left: 0; width: 100%; }
+}

@@ -1,6 +1,6 @@
 <%- include('partials/app-start') %>
   <link rel="stylesheet" href="/css/materia-chat.css?v=20260902tomTitulosClaude1" />
-  <link rel="stylesheet" href="/css/materia-manual.css?v=20260929furos2" />
+  <link rel="stylesheet" href="/css/materia-manual.css?v=20260929auto1" />
   <link rel="stylesheet" href="/css/feed-sugerido.css?v=20260927feed4" />
 
   <main class="mia-chat mia-manual-claude" data-recolher-menu>
@@ -408,6 +408,52 @@
             </div>
           </div>
 
+          <section id="furos-auto" class="mia-furos-auto" aria-labelledby="furos-auto-titulo">
+            <label class="mia-furos-auto-toggle">
+              <input type="checkbox" id="furos-auto-ativo" />
+              <span>
+                <strong id="furos-auto-titulo">Automatizar</strong>
+                <small>A cada 5 min a IA procura pautas novas, escolhe as melhores, escreve, gera a imagem com IA e publica sozinha. Usa os nichos, fontes e período marcados acima.</small>
+              </span>
+            </label>
+            <div class="mia-furos-auto-campos">
+              <label>
+                <span>Postar a cada</span>
+                <select id="furos-auto-intervalo">
+                  <option value="5">5 min</option>
+                  <option value="10" selected>10 min</option>
+                  <option value="15">15 min</option>
+                  <option value="20">20 min</option>
+                  <option value="30">30 min</option>
+                  <option value="60">1 hora</option>
+                </select>
+              </label>
+              <label>
+                <span>Página</span>
+                <select id="furos-auto-pagina"><option value="">Página padrão</option></select>
+              </label>
+              <label>
+                <span>Máximo por dia</span>
+                <select id="furos-auto-limite">
+                  <option value="20">20</option>
+                  <option value="40" selected>40</option>
+                  <option value="60">60</option>
+                  <option value="100">100</option>
+                </select>
+              </label>
+              <label class="mia-furos-auto-check">
+                <input type="checkbox" id="furos-auto-foto" checked />
+                <span>Se a imagem da IA falhar 2 vezes, publicar com a arte da foto original</span>
+              </label>
+              <div class="mia-furos-auto-botoes">
+                <button type="button" id="furos-auto-salvar" class="mia-furos-sec">Salvar configuração</button>
+                <button type="button" id="furos-auto-escanear" class="mia-furos-sec" hidden>Varrer agora</button>
+              </div>
+            </div>
+            <p id="furos-auto-resumo" class="mia-furos-auto-resumo" aria-live="polite"></p>
+            <ol id="furos-auto-itens" class="mia-furos-auto-itens"></ol>
+          </section>
+
           <p id="furos-status" class="mia-furos-status" aria-live="polite"></p>
           <div id="furos-lista" class="mia-furos-lista"></div>
 
@@ -627,5 +673,6 @@
   <script src="/js/materia-chat.js?v=20260928feedModelo1"></script>
   <script src="/js/materia-chat-extras.js?v=20260915radarAmpliado1"></script>
   <script src="/js/materia-furos.js?v=20260929furos2"></script>
+  <script src="/js/materia-furos-auto.js?v=20260929auto1"></script>
   <script src="/js/feed-sugerido.js?v=20260928feedModelo1"></script>
 <%- include('partials/app-end') %>

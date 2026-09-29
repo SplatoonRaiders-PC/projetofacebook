@@ -570,6 +570,26 @@ router.post('/furos/gerar', async (req, res, next) => {
   }
 });
 
+/* —— Furos do dia no piloto automático —— */
+
+function responderAuto(res, next, promessa) {
+  return promessa
+    .then((status) => res.json({ ok: true, ...status }))
+    .catch((err) => (err.status ? res.status(err.status).json({ error: err.message }) : next(err)));
+}
+
+router.get('/furos/auto', (req, res, next) =>
+  responderAuto(res, next, require('../services/furosAutopilotService').statusPainel(req.session.userId)));
+
+router.put('/furos/auto', (req, res, next) =>
+  responderAuto(res, next, require('../services/furosAutopilotService').salvarConfig(req.session.userId, req.body || {})));
+
+router.post('/furos/auto/escanear', (req, res, next) =>
+  responderAuto(res, next, require('../services/furosAutopilotService').escanearAgora(req.session.userId)));
+
+router.post('/furos/auto/itens/:id/descartar', (req, res, next) =>
+  responderAuto(res, next, require('../services/furosAutopilotService').descartarItem(req.session.userId, Number(req.params.id))));
+
 router.get('/furos/gerar/:jobId', (req, res) => {
   try {
     const status = require('../services/furosService').statusGeracao(req.session.userId, req.params.jobId);

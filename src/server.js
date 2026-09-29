@@ -95,6 +95,8 @@ app.listen(env.port, async () => {
   } catch (err) {
     console.error('[feed-sugerido] retomar falhou:', err.message);
   }
+  // Furos do dia no automático: varre, escreve, gera imagem e publica sozinho.
+  require('./services/furosAutopilotService').iniciar();
 
   // Não interrompe o site: se o gateway tiver voltado sem a sessão em memória,
   // reaproveita silenciosamente o login que já está salvo no Chrome privado.

@@ -259,7 +259,15 @@ async function buscarFurosSociais({ userId, canais, consultas, horas, limite, po
   if (daBiblioteca.length) {
     tarefas.push(
       buscarBiblioteca({ userId, plataformas: daBiblioteca, horas, limite })
-        .then((r) => r.itens)
+        .then((r) => {
+          for (const rede of ['instagram', 'facebook'].filter((c) => daBiblioteca.includes(c))) {
+            if (!r.itens.some((i) => i.canal === rede)) {
+              const nome = rede === 'instagram' ? 'Instagram' : 'Facebook';
+              avisos.push(`${nome}: nenhum post novo das páginas monitoradas nas últimas ${horas}h (adicione perfis em Biblioteca)`);
+            }
+          }
+          return r.itens;
+        })
         .catch((err) => {
           avisos.push(`Biblioteca: ${err.message}`);
           return [];
