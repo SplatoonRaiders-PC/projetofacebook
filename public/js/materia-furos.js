@@ -58,6 +58,7 @@
 
   function setStatus(texto, tipo = '') {
     el.status.textContent = texto || '';
+    el.status.title = texto || ''; // texto completo ao passar o mouse (a linha é cortada em 2)
     el.status.dataset.tipo = tipo;
   }
 

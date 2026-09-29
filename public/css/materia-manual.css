@@ -610,3 +610,46 @@ body.mia-furos-aberto { overflow: hidden; }
 .mia-manual-claude .mia-piloto-chip.is-ligado { border-color: rgb(52 211 153 / 45%); color: #6ee7b7; background: rgb(16 185 129 / 8%); }
 .mia-manual-claude .mia-piloto-chip.is-pausado { border-color: rgb(251 191 36 / 45%); color: #fcd34d; background: rgb(251 191 36 / 8%); }
 .mia-manual-claude .mia-furos-auto-toggle small a { color: #6ee7b7; }
+
+/* Furos do dia — piloto compacto: uma linha; detalhes recolhidos.
+   A lista de pautas fica com o espaço principal do painel. */
+.mia-manual-claude .mia-furos-auto { flex: 0 0 auto; gap: .35rem; margin: .55rem 1.25rem 0; padding: .5rem .75rem; }
+.mia-manual-claude .mia-furos-auto-linha { display: flex; align-items: center; gap: .6rem; min-width: 0; }
+.mia-manual-claude .mia-furos-auto-toggle { flex: none; align-items: center; gap: .45rem; }
+.mia-manual-claude .mia-furos-auto-toggle input { margin-top: 0; }
+.mia-manual-claude .mia-furos-auto-curto {
+  flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: .74rem; color: var(--mia-chat-muted);
+}
+.mia-manual-claude .mia-furos-auto-curto[data-tipo="ok"] { color: #6ee7b7; }
+.mia-manual-claude .mia-furos-auto-curto[data-tipo="aviso"] { color: #fcd34d; }
+.mia-manual-claude .mia-furos-auto-curto[data-tipo="pausado"] { color: #fcd34d; }
+.mia-manual-claude .mia-furos-auto-link { flex: none; font-size: .72rem; color: #6ee7b7; text-decoration: none; }
+.mia-manual-claude .mia-furos-auto-link:hover { text-decoration: underline; }
+.mia-manual-claude .mia-furos-auto-mais > summary {
+  cursor: pointer; width: max-content; font-size: .72rem; color: var(--mia-chat-muted); list-style-position: inside;
+}
+.mia-manual-claude .mia-furos-auto-mais > summary:hover { color: var(--mia-chat-text); }
+.mia-manual-claude .mia-furos-auto-mais[open] {
+  display: grid; gap: .55rem; max-height: min(42dvh, 22rem); overflow-y: auto; padding-right: .25rem;
+  scrollbar-width: thin; scrollbar-color: rgb(255 255 255 / 12%) transparent;
+}
+.mia-manual-claude .mia-furos-auto-ajuda { margin: 0; font-size: .7rem; line-height: 1.45; color: var(--mia-chat-faint, var(--mia-chat-muted)); }
+.mia-manual-claude .mia-furos-auto-itens { max-height: 10rem; }
+.mia-manual-claude .mia-furos-status {
+  flex: 0 0 auto; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.mia-manual-claude .mia-furos-lista { min-height: min(20rem, 45dvh); }
+@media (max-width: 640px) {
+  .mia-manual-claude .mia-furos-auto-linha { flex-wrap: wrap; }
+  .mia-manual-claude .mia-furos-auto-curto { flex-basis: 100%; order: 3; white-space: normal; }
+}
+/* Aberto, o "Configurar" rola por dentro e não empurra o rodapé para fora. */
+.mia-manual-claude .mia-furos-auto-mais[open] { max-height: min(28dvh, 14rem); }
+.mia-manual-claude .mia-furos-auto-itens { max-height: 7rem; }
+.mia-manual-claude .mia-furos-lista { min-height: min(18rem, 34dvh); }
+.mia-manual-claude .mia-furos-foot { flex: 0 0 auto; }
+/* Se o conteúdo passar da altura (ex.: "Configurar" aberto), o painel rola e
+   o rodapé com "Gerar matérias" fica sempre visível. */
+.mia-manual-claude .mia-furos { overflow-y: auto; scrollbar-width: thin; scrollbar-color: rgb(255 255 255 / 12%) transparent; }
+.mia-manual-claude .mia-furos-foot { position: sticky; bottom: 0; z-index: 2; }

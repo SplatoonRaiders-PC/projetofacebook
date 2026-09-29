@@ -1,6 +1,6 @@
 <%- include('partials/app-start') %>
   <link rel="stylesheet" href="/css/materia-chat.css?v=20260902tomTitulosClaude1" />
-  <link rel="stylesheet" href="/css/materia-manual.css?v=20260929auto2" />
+  <link rel="stylesheet" href="/css/materia-manual.css?v=20260929auto5" />
   <link rel="stylesheet" href="/css/feed-sugerido.css?v=20260927feed4" />
 
   <main class="mia-chat mia-manual-claude" data-recolher-menu>
@@ -410,49 +410,54 @@
           </div>
 
           <section id="furos-auto" class="mia-furos-auto" aria-labelledby="furos-auto-titulo">
-            <label class="mia-furos-auto-toggle">
-              <input type="checkbox" id="furos-auto-ativo" />
-              <span>
+            <div class="mia-furos-auto-linha">
+              <label class="mia-furos-auto-toggle" title="A cada 5 min a IA procura pautas novas, escolhe as melhores, escreve, gera a imagem com IA e publica sozinha. Roda no servidor, mesmo com o navegador fechado.">
+                <input type="checkbox" id="furos-auto-ativo" />
                 <strong id="furos-auto-titulo">Automatizar</strong>
-                <small>A cada 5 min a IA procura pautas novas, escolhe as melhores, escreve, gera a imagem com IA e publica sozinha. Usa os nichos, fontes e período marcados acima. Roda no servidor: pode fechar o navegador ou desligar o computador. Desmarque para pausar. <a href="/piloto-automatico" target="_blank" rel="noopener">Acompanhar o andamento</a></small>
-              </span>
-            </label>
-            <div class="mia-furos-auto-campos">
-              <label>
-                <span>Postar a cada</span>
-                <select id="furos-auto-intervalo">
-                  <option value="5">5 min</option>
-                  <option value="10" selected>10 min</option>
-                  <option value="15">15 min</option>
-                  <option value="20">20 min</option>
-                  <option value="30">30 min</option>
-                  <option value="60">1 hora</option>
-                </select>
               </label>
-              <label>
-                <span>Página</span>
-                <select id="furos-auto-pagina"><option value="">Página padrão</option></select>
-              </label>
-              <label>
-                <span>Máximo por dia</span>
-                <select id="furos-auto-limite">
-                  <option value="20">20</option>
-                  <option value="40" selected>40</option>
-                  <option value="60">60</option>
-                  <option value="100">100</option>
-                </select>
-              </label>
-              <label class="mia-furos-auto-check">
-                <input type="checkbox" id="furos-auto-foto" checked />
-                <span>Se a imagem da IA falhar 2 vezes, publicar com a arte da foto original</span>
-              </label>
-              <div class="mia-furos-auto-botoes">
-                <button type="button" id="furos-auto-salvar" class="mia-furos-sec">Salvar configuração</button>
-                <button type="button" id="furos-auto-escanear" class="mia-furos-sec" hidden>Varrer agora</button>
-              </div>
+              <span id="furos-auto-curto" class="mia-furos-auto-curto" aria-live="polite">A IA escolhe, escreve, gera a imagem e publica sozinha.</span>
+              <a href="/piloto-automatico" target="_blank" rel="noopener" class="mia-furos-auto-link">Acompanhar</a>
             </div>
-            <p id="furos-auto-resumo" class="mia-furos-auto-resumo" aria-live="polite"></p>
-            <ol id="furos-auto-itens" class="mia-furos-auto-itens"></ol>
+            <details id="furos-auto-mais" class="mia-furos-auto-mais">
+              <summary>Configurar e ver andamento</summary>
+              <p class="mia-furos-auto-ajuda">A cada 5 min a IA procura pautas novas (com os nichos, fontes e período marcados acima), escolhe as melhores, escreve, gera a imagem com IA e publica sozinha. Roda no servidor: pode fechar o navegador ou desligar o computador. Desmarque “Automatizar” para pausar.</p>
+              <div class="mia-furos-auto-campos">
+                <label>
+                  <span>Postar a cada</span>
+                  <select id="furos-auto-intervalo">
+                    <option value="5">5 min</option>
+                    <option value="10" selected>10 min</option>
+                    <option value="15">15 min</option>
+                    <option value="20">20 min</option>
+                    <option value="30">30 min</option>
+                    <option value="60">1 hora</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Página</span>
+                  <select id="furos-auto-pagina"><option value="">Página padrão</option></select>
+                </label>
+                <label>
+                  <span>Máximo por dia</span>
+                  <select id="furos-auto-limite">
+                    <option value="20">20</option>
+                    <option value="40" selected>40</option>
+                    <option value="60">60</option>
+                    <option value="100">100</option>
+                  </select>
+                </label>
+                <label class="mia-furos-auto-check">
+                  <input type="checkbox" id="furos-auto-foto" checked />
+                  <span>Se a imagem da IA falhar 2 vezes, publicar com a arte da foto original</span>
+                </label>
+                <div class="mia-furos-auto-botoes">
+                  <button type="button" id="furos-auto-salvar" class="mia-furos-sec">Salvar configuração</button>
+                  <button type="button" id="furos-auto-escanear" class="mia-furos-sec" hidden>Varrer agora</button>
+                </div>
+              </div>
+              <p id="furos-auto-resumo" class="mia-furos-auto-resumo" aria-live="polite"></p>
+              <ol id="furos-auto-itens" class="mia-furos-auto-itens"></ol>
+            </details>
           </section>
 
           <p id="furos-status" class="mia-furos-status" aria-live="polite"></p>
@@ -673,7 +678,7 @@
   </script>
   <script src="/js/materia-chat.js?v=20260928feedModelo1"></script>
   <script src="/js/materia-chat-extras.js?v=20260915radarAmpliado1"></script>
-  <script src="/js/materia-furos.js?v=20260929furos3"></script>
-  <script src="/js/materia-furos-auto.js?v=20260929auto4"></script>
+  <script src="/js/materia-furos.js?v=20260929furos4"></script>
+  <script src="/js/materia-furos-auto.js?v=20260929auto5"></script>
   <script src="/js/feed-sugerido.js?v=20260928feedModelo1"></script>
 <%- include('partials/app-end') %>

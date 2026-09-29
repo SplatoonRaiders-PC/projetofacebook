@@ -23,6 +23,8 @@
     resumo: $('furos-auto-resumo'),
     itens: $('furos-auto-itens'),
     chip: $('piloto-chip'),
+    curto: $('furos-auto-curto'),
+    mais: $('furos-auto-mais'),
   };
 
   const ETAPAS = {
@@ -117,12 +119,40 @@
       : 'Piloto automático pausado. Clique para acompanhar ou retomar.';
   }
 
+  function renderCurto(status) {
+    if (!el.curto) return;
+    const { config, publicadasHoje = 0 } = status;
+    let texto;
+    if (config.ativo) {
+      const proxima = config.proxima_postagem_at && new Date(config.proxima_postagem_at) > new Date()
+        ? `próxima às ${hora(config.proxima_postagem_at)}`
+        : 'publica assim que ficar pronta';
+      texto = [
+        `Ligado · a cada ${config.intervalo_minutos} min`,
+        proxima,
+        `${publicadasHoje}/${config.limite_dia} hoje`,
+        status.modeloNome ? `escreve com ${status.modeloNome}` : null,
+      ].filter(Boolean).join(' · ');
+    } else if (config.existe) {
+      const desde = config.pausado_at
+        ? ` desde ${new Date(config.pausado_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}`
+        : '';
+      texto = `Pausado${desde} · ${publicadasHoje} publicada(s) hoje`;
+    } else {
+      texto = 'A IA escolhe, escreve, gera a imagem e publica sozinha.';
+    }
+    el.curto.textContent = texto;
+    el.curto.dataset.tipo = config.ativo ? (config.ultimo_erro ? 'aviso' : 'ok') : config.existe ? 'pausado' : '';
+  }
+
   function render(status, { preencherForm = false } = {}) {
     ultimoStatus = status;
     renderChip(status);
+    renderCurto(status);
     const { config, contagens = {}, publicadasHoje = 0 } = status;
     el.ativo.checked = Boolean(config.ativo);
     if (!formPreenchido || preencherForm) {
+      if (!formPreenchido && el.mais && !config.existe) el.mais.open = true;
       formPreenchido = true;
       el.intervalo.value = String(config.intervalo_minutos || 10);
       el.limite.value = String(config.limite_dia || 40);
