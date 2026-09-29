@@ -28,7 +28,6 @@ const ATIVOS = ['na_fila', 'coletando', 'processando'];
 /** Impedem outra coleta do mesmo editor (inclui a espera pela escolha). */
 const EM_ABERTO = [...ATIVOS, 'aguardando_escolha'];
 const FINAIS_ITEM = ['pronto', 'ignorado', 'erro'];
-const LIMITE_IMAGEM_MS = 8 * 60 * 1000;
 
 const fila = [];
 let rodando = false;
@@ -422,83 +421,9 @@ async function executarJob(id) {
   });
 }
 
-/**
- * Pedido enviado ao mesmo redator do "Criar matéria": SÓ o link, como o
- * editor faz no chat. Texto longo junto de um link social é tratado pelo chat
- * como a legenda colada pelo editor — instruções ali viravam a "legenda" do
- * Reel e a checagem recusava escrever. As regras jornalísticas já são as do
- * próprio chat.
- */
-function pedidoDaMateria(item) {
-  return item.url;
-}
-
-/** Mesmo pedido de capa do botão "Capa com IA" do /materia-manual. */
-function promptCapaIa(titulo) {
-  return [
-    'Crie uma NOVA imagem editorial fotorrealista inspirada na imagem de referência enviada.',
-    'Mantenha o assunto, as pessoas e a atmosfera reconhecíveis, mas reconstrua a cena de forma original e natural.',
-    'Não inclua texto, letras, legendas, placas legíveis, logotipos, marcas d’água, molduras ou elementos gráficos.',
-    'Composição vertical exata 4:5 (1080 × 1350 pixels), em alta qualidade, adequada como imagem destacada de uma notícia no feed do Facebook. Não gere imagem quadrada ou horizontal.',
-    `Contexto da matéria: ${String(titulo || '').replace(/\[\[|\]\]|\*\*/g, '').trim()}`,
-  ].join('\n\n');
-}
-
-function comLimite(promise, ms, mensagem) {
-  let timer;
-  return Promise.race([
-    promise,
-    new Promise((_, reject) => {
-      timer = setTimeout(() => reject(new Error(mensagem)), ms);
-    }),
-  ]).finally(() => clearTimeout(timer));
-}
-
-/** Refaz a capa com o ChatGPT a partir da foto da matéria. */
-async function aplicarCapaChatgpt({ userId, matterId, thumbnail }) {
-  const AiMatters = require('../models/AiMatters');
-  const matter = await AiMatters.findById(matterId);
-  if (!matter) throw new Error('matéria não encontrada');
-  let fonte = String(matter.imagem_fonte_url || '').trim();
-  if (!fonte || /\/media\/artes\//i.test(fonte)) fonte = thumbnail && /^https?:\/\//i.test(thumbnail) ? thumbnail : '';
-  if (!fonte) throw new Error('não há foto de referência para o ChatGPT');
-
-  const chatgptImageService = require('./chatgptImageService');
-  const { storeMatterSourceImage, composeMatterArtwork } = require('./matterArtworkService');
-  const gerada = await comLimite(
-    chatgptImageService.gerarImagem({
-      sourceUrl: fonte,
-      prompt: promptCapaIa(matter.titulo),
-      titulo: matter.titulo || '',
-      materia: matter.materia || '',
-      recoveryKey: `${userId}:${matterId}`,
-      modo: 'referencia',
-    }),
-    LIMITE_IMAGEM_MS,
-    'o ChatGPT demorou mais de 8 min'
-  );
-  const guardada = await storeMatterSourceImage({ userId, matterId, buffer: gerada.buffer });
-  await composeMatterArtwork({
-    userId,
-    matterId,
-    sourceUrl: guardada.publicUrl,
-    title: matter.titulo,
-    force: true,
-  });
-
-  // Crédito honesto: a foto agora é ilustração gerada por IA.
-  const trocarCredito = (texto) =>
-    String(texto || '')
-      .replace(/\(Foto:[^)\n]*\)/gi, '(Foto: Imagem gerada por IA)')
-      .replace(/(\*\*Foto:\*\*)[^\n]*/gi, '$1 Imagem gerada por IA');
-  const patch = {};
-  if (matter.materia) patch.materia = trocarCredito(matter.materia);
-  if (matter.fonte_credito) patch.fonte_credito = trocarCredito(matter.fonte_credito);
-  if (Object.keys(patch).length) await AiMatters.update(matterId, patch);
-}
-
 /** @returns {Promise<boolean>} true quando a matéria foi criada. */
 async function processarItem(job, opcoes, item) {
+  const { escreverPeloChat, aplicarCapaChatgpt } = require('./materiaPorChat');
   const chatService = require('./materiaChatService');
   const { comModelo } = require('./tokenFreeGatewayService');
 
@@ -508,63 +433,24 @@ async function processarItem(job, opcoes, item) {
   const modelo = await resolverModeloDoFeed(opcoes.modelo);
 
   let ultimaEtapa = 0;
-  let chatId = null;
-  const onEvent = (evento) => {
-    if (evento?.tipo === 'conversa' && evento.chat?.id) chatId = evento.chat.id;
-    // Mostra no painel o passo atual do chat (transcrição, escrita…).
-    if (evento?.tipo !== 'passo' || !evento.passo?.texto) return;
-    if (Date.now() - ultimaEtapa < 1500) return;
-    ultimaEtapa = Date.now();
-    const escrevendo = /escrev|redig|revis/i.test(evento.passo.texto);
-    atualizarItem(item.id, {
-      status: escrevendo ? 'escrevendo' : 'transcrevendo',
-      etapa: corta(evento.passo.texto, 255),
-    }).catch(() => {});
-  };
-
-  // Só as conversas que viraram matéria ficam no histórico do chat.
-  const descartarConversa = () =>
-    chatId
-      ? chatService.excluirConversa({ userId: job.user_id, chatId }).catch(() => {})
-      : Promise.resolve();
-
-  let resposta;
-  try {
-    resposta = await comModelo(modelo, () => chatService.responder({
-      userId: job.user_id,
-      texto: pedidoDaMateria(item),
-      pesquisarWeb: Boolean(opcoes.pesquisarWeb),
-      tom: opcoes.tom || 'natural',
-      modo: 'escrever',
-      tipoConversa: 'materia',
-      transcreverVideo: true,
-      onEvent,
-    }));
-  } catch (err) {
-    await descartarConversa();
-    throw err;
-  }
-
-  const mensagem = resposta?.mensagem;
-  if (!mensagem?.id || !mensagem.ehMateria) {
-    await descartarConversa();
-    const trecho = String(mensagem?.conteudo || mensagem?.content || '').replace(/\s+/g, ' ').trim().slice(0, 220);
-    await atualizarItem(item.id, {
-      status: 'erro',
-      etapa: null,
-      erro: corta(`A IA não escreveu matéria deste vídeo${trecho ? `: ${trecho}` : '.'}`, 500),
-    });
-    return false;
-  }
-
-  await atualizarItem(item.id, { status: 'escrevendo', etapa: 'Salvando o rascunho e montando a arte…' });
-  const salvo = await chatService.salvarMateriaDoChat({
+  const { matterId, chatId } = await escreverPeloChat({ chatService, comModelo }, {
     userId: job.user_id,
-    messageId: mensagem.id,
+    url: item.url,
     facebookPageId: job.facebook_page_id || null,
-    imagemUrl: item.thumbnail && /^https?:\/\//i.test(item.thumbnail) ? item.thumbnail : null,
+    imagemUrl: item.thumbnail,
+    modelo,
+    tom: opcoes.tom,
+    pesquisarWeb: opcoes.pesquisarWeb,
+    onPasso: (texto) => {
+      // Mostra no painel o passo atual do chat (transcrição, escrita…).
+      if (Date.now() - ultimaEtapa < 1500) return;
+      ultimaEtapa = Date.now();
+      atualizarItem(item.id, {
+        status: /escrev|redig|revis/i.test(texto) ? 'escrevendo' : 'transcrevendo',
+        etapa: corta(texto, 255),
+      }).catch(() => {});
+    },
   });
-  const matterId = salvo?.matterId || null;
 
   // A conversa fica no chat para o editor pedir ajustes, com nome reconhecível.
   const AiMatters = require('../models/AiMatters');
@@ -573,7 +459,7 @@ async function processarItem(job, opcoes, item) {
     const tituloLimpo = String(matter?.titulo || item.titulo || '').replace(/\[\[|\]\]|\*\*/g, '').trim();
     await chatService.renomearConversa({
       userId: job.user_id,
-      chatId: resposta.chatId,
+      chatId,
       titulo: `Feed ${ROTULOS[item.plataforma]} · ${tituloLimpo}`.slice(0, 180),
     });
   } catch {
