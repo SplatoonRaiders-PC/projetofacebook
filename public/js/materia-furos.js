@@ -1,7 +1,9 @@
 /**
- * Furos do dia (/materia-manual): busca as notícias mais quentes do nicho no
- * Google News, ordena pelo potencial de repercussão e gera várias matérias
- * em sequência, uma requisição por pauta para mostrar o progresso.
+ * Furos do dia (/materia-manual): busca o que está quente no nicho no Google
+ * News, YouTube e nos perfis do Instagram/Facebook monitorados pela
+ * Biblioteca, ordena pelo potencial de repercussão e gera várias matérias em
+ * sequência. Vídeos e posts são escritos em segundo plano (transcrição pelo
+ * mesmo fluxo do chat) e o painel acompanha cada um.
  */
 (function () {
   const dialog = document.getElementById('furos-dialog');
@@ -9,7 +11,11 @@
 
   const API = '/api/materias-ia/chat-extras/furos';
   const NICHOS_KEY = 'ViralizeAI.furosNichos';
-  const MAX_LOTE = 8;
+  const CANAIS_KEY = 'ViralizeAI.furosCanais';
+  const LIMITE_KEY = 'ViralizeAI.furosLimite';
+  const MAX_LOTE = 12;
+  const ROTULO_CANAL = { noticias: 'Notícia', youtube: 'YouTube', instagram: 'Instagram', facebook: 'Facebook' };
+  const ESPERA_REDE_MS = 15 * 60 * 1000;
 
   const el = {
     backdrop: document.getElementById('furos-backdrop'),
@@ -21,12 +27,15 @@
     top: document.getElementById('furos-top'),
     gerar: document.getElementById('furos-gerar'),
     horas: dialog.querySelectorAll('[data-furos-horas]'),
+    canais: dialog.querySelectorAll('[data-furos-canal]'),
+    limite: document.getElementById('furos-limite'),
   };
 
   const state = {
     nichos: [],
     sugeridos: [],
     selecionados: new Set(['auto']),
+    canais: new Set(['noticias', 'youtube', 'instagram', 'facebook']),
     horas: 24,
     furos: [],
     marcados: new Set(),
@@ -143,6 +152,50 @@
     }
   }
 
+  function lerSalvo(chave) {
+    try {
+      return JSON.parse(localStorage.getItem(chave) || 'null');
+    } catch {
+      return null;
+    }
+  }
+
+  function salvar(chave, valor) {
+    try { localStorage.setItem(chave, JSON.stringify(valor)); } catch { /* ignore */ }
+  }
+
+  function renderCanais() {
+    el.canais.forEach((botao) => {
+      const ativo = state.canais.has(botao.dataset.furosCanal);
+      botao.classList.toggle('is-active', ativo);
+      botao.setAttribute('aria-pressed', String(ativo));
+    });
+  }
+
+  const canaisSalvos = lerSalvo(CANAIS_KEY);
+  if (Array.isArray(canaisSalvos) && canaisSalvos.length) {
+    state.canais = new Set(canaisSalvos.filter((c) => ROTULO_CANAL[c]));
+    if (!state.canais.size) state.canais = new Set(Object.keys(ROTULO_CANAL));
+  }
+  renderCanais();
+  el.canais.forEach((botao) => {
+    botao.addEventListener('click', () => {
+      const canal = botao.dataset.furosCanal;
+      if (state.canais.has(canal) && state.canais.size === 1) {
+        setStatus('Deixe pelo menos uma fonte marcada.', 'aviso');
+        return;
+      }
+      if (state.canais.has(canal)) state.canais.delete(canal);
+      else state.canais.add(canal);
+      salvar(CANAIS_KEY, [...state.canais]);
+      renderCanais();
+    });
+  });
+
+  const limiteSalvo = Number(lerSalvo(LIMITE_KEY));
+  if (el.limite && [15, 25, 40].includes(limiteSalvo)) el.limite.value = String(limiteSalvo);
+  el.limite?.addEventListener('change', () => salvar(LIMITE_KEY, Number(el.limite.value) || 25));
+
   el.horas.forEach((botao) => {
     botao.addEventListener('click', () => {
       state.horas = Number(botao.dataset.furosHoras) || 24;
@@ -188,7 +241,7 @@
     card.dataset.estado = r?.estado || '';
     if (!r) return;
     if (r.estado === 'fila') alvo.textContent = 'Na fila';
-    if (r.estado === 'gerando') alvo.textContent = 'Escrevendo a matéria…';
+    if (r.estado === 'gerando') alvo.textContent = r.etapa || 'Escrevendo a matéria…';
     if (r.estado === 'erro') alvo.textContent = r.erro;
     if (r.estado === 'ok') {
       const link = document.createElement('a');
@@ -248,12 +301,18 @@
       titulo.textContent = furo.titulo;
       const meta = document.createElement('p');
       meta.className = 'mia-furo-meta';
-      meta.textContent = [
+      if (furo.canal && furo.canal !== 'noticias') {
+        const selo = document.createElement('span');
+        selo.className = `mia-furo-canal is-${furo.canal}`;
+        selo.textContent = ROTULO_CANAL[furo.canal] || furo.canal;
+        meta.appendChild(selo);
+      }
+      meta.append([
         furo.veiculo,
         furo.veiculos?.length > 1 ? `+${furo.veiculos.length - 1} veículos` : null,
         tempoRelativo(furo.dataTimestamp),
         furo.nicho,
-      ].filter(Boolean).join(' · ');
+      ].filter(Boolean).join(' · '));
       const motivos = document.createElement('div');
       motivos.className = 'mia-furo-motivos';
       for (const motivo of furo.motivos || []) {
@@ -294,20 +353,29 @@
       esqueleto.className = 'mia-furo is-esqueleto';
       el.lista.appendChild(esqueleto);
     }
-    setStatus('Varrendo o Google News e comparando veículos… leva uns 20 segundos.');
+    setStatus('Varrendo Google News, YouTube e as páginas monitoradas… leva uns 30 segundos.');
     atualizarAcoes();
     try {
       const data = await api(`${API}/buscar`, {
         method: 'POST',
-        body: JSON.stringify({ nichos: [...state.selecionados], horas: state.horas, limite: 15 }),
+        body: JSON.stringify({
+          nichos: [...state.selecionados],
+          horas: state.horas,
+          limite: Number(el.limite?.value) || 25,
+          canais: [...state.canais],
+        }),
       });
       state.furos = data.furos || [];
       renderFuros();
       const nichos = (data.nichos || []).map((n) => n.rotulo).join(', ');
+      const porCanal = Object.entries(data.porCanal || {})
+        .map(([canal, total]) => `${total} ${canal === 'noticias' ? 'notícias' : ROTULO_CANAL[canal] || canal}`)
+        .join(', ');
+      const avisos = (data.avisos || []).length ? ` · ${data.avisos.join(' · ')}` : '';
       setStatus(
         state.furos.length
-          ? `${state.furos.length} pautas em ${nichos} · últimas ${data.horas}h${data.totalOcultado ? ` · ${data.totalOcultado} já viraram matéria e foram escondidas` : ''}.`
-          : `Nada novo em ${nichos} nas últimas ${data.horas}h. Tente 48h ou outro nicho.`,
+          ? `${state.furos.length} pautas em ${nichos}${porCanal ? ` (${porCanal})` : ''} · últimas ${data.horas}h${data.totalOcultado ? ` · ${data.totalOcultado} já viraram matéria e foram escondidas` : ''}${avisos}.`
+          : `Nada novo em ${nichos} nas últimas ${data.horas}h. Tente 48h, outro nicho ou mais fontes.${avisos}`,
         state.furos.length ? '' : 'aviso'
       );
     } catch (err) {
@@ -340,6 +408,26 @@
     if (card) renderResultado(card, indice);
   }
 
+  function modeloEscolhido() {
+    return document.getElementById('chat-ai-model')?.dataset.modelo || null;
+  }
+
+  /** Acompanha a geração de vídeo/post das redes até terminar. */
+  async function acompanharGeracao(indice, jobId) {
+    const limite = Date.now() + ESPERA_REDE_MS;
+    while (Date.now() < limite) {
+      await new Promise((r) => setTimeout(r, 3000));
+      const res = await fetch(`${API}/gerar/${encodeURIComponent(jobId)}`, { headers: { Accept: 'application/json' } });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok && res.status !== 202) throw new Error(data.error || 'Não foi possível acompanhar a matéria.');
+      if (data.estado === 'ok') return data;
+      if (data.estado === 'erro') throw new Error(data.erro || 'A matéria não foi escrita.');
+      state.resultados.set(indice, { estado: 'gerando', etapa: data.etapa });
+      atualizarCard(indice);
+    }
+    throw new Error('A matéria ainda está sendo escrita. Confira em Matérias salvas daqui a pouco.');
+  }
+
   el.gerar.addEventListener('click', async () => {
     const fila = [...state.marcados].sort((a, b) => a - b);
     if (!fila.length || state.gerando) return;
@@ -357,10 +445,15 @@
       atualizarCard(indice);
       setStatus(`Escrevendo matéria ${passo + 1} de ${fila.length}…`);
       try {
-        const data = await api(`${API}/gerar`, {
+        let data = await api(`${API}/gerar`, {
           method: 'POST',
-          body: JSON.stringify({ pauta: state.furos[indice] }),
+          body: JSON.stringify({ pauta: state.furos[indice], modelo: modeloEscolhido() }),
         });
+        if (data.jobId) {
+          state.resultados.set(indice, { estado: 'gerando', etapa: 'Lendo o vídeo e transcrevendo…' });
+          atualizarCard(indice);
+          data = await acompanharGeracao(indice, data.jobId);
+        }
         state.resultados.set(indice, { estado: 'ok', matterId: data.matterId, redirect: data.redirect });
         ok += 1;
       } catch (err) {

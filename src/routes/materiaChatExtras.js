@@ -154,7 +154,7 @@ function distribuirPorTema(agrupados, rotulos, limite) {
  */
 async function radarPorTemas(
   temas,
-  { horas = 24, limite = LIMITE_TOPICOS, userId = null } = {}
+  { horas = 24, limite = LIMITE_TOPICOS, userId = null, consultasPorTema = 2, apurar = true } = {}
 ) {
   const nr = require('../services/newsResearch');
   const alvo = temas.slice(0, 12);
@@ -165,7 +165,7 @@ async function radarPorTemas(
   const tarefas = [];
   const marcar = (tema, promessa) => tarefas.push({ tema, promessa });
   alvo.forEach((tema, indice) => {
-    tema.consultas.slice(0, 2).forEach((consulta) => {
+    tema.consultas.slice(0, Math.min(Math.max(Number(consultasPorTema) || 2, 1), 8)).forEach((consulta) => {
       marcar(tema.rotulo, nr.buscarGoogleNewsEmAlta(consulta));
       marcar(tema.rotulo, nr.buscarGoogleNewsRss(consulta, { when }));
       marcar(tema.rotulo, nr.buscarBraveNews(consulta, periodoPesquisa));
@@ -213,6 +213,8 @@ async function radarPorTemas(
     totalOcultado = Number(sincronizado.novosExcluidos) || 0;
   }
   escolhidos = escolhidos.slice(0, limite);
+  // Quem chama pode completar só os itens que vão aparecer (ex.: Furos do dia).
+  if (!apurar) return { topicos: escolhidos, totalAnalisado: filtrados.length, totalOcultado, horas };
 
   // Apuração extra é bônus e roda em paralelo: se falhar, o item cru já serve.
   const { apurarTopico } = require('../services/articleSource');
@@ -532,7 +534,8 @@ router.post('/furos/buscar', async (req, res, next) => {
       userId: req.session.userId,
       nichos: Array.isArray(body.nichos) ? body.nichos.slice(0, 8) : [],
       horas: Number(body.horas) || 24,
-      limite: Math.min(Math.max(Number(body.limite) || 12, 3), 20),
+      limite: Math.min(Math.max(Number(body.limite) || 12, 3), 40),
+      canais: Array.isArray(body.canais) ? body.canais.slice(0, 4) : [],
     });
     return res.json({ ok: true, ...resultado });
   } catch (err) {
@@ -544,7 +547,18 @@ router.post('/furos/buscar', async (req, res, next) => {
 /** Uma pauta por chamada: o front mostra o progresso de cada matéria. */
 router.post('/furos/gerar', async (req, res, next) => {
   try {
-    const resultado = await require('../services/furosService').gerarFuro({
+    const furos = require('../services/furosService');
+    // Vídeo/post das redes: transcreve e escreve pelo chat, em segundo plano.
+    if (furos.ehPautaDeRede(req.body?.pauta)) {
+      const inicio = await furos.iniciarGeracaoDeRede({
+        userId: req.session.userId,
+        pauta: req.body.pauta,
+        facebookPageId: req.body?.facebookPageId || null,
+        modelo: req.body?.modelo || null,
+      });
+      return res.status(202).json({ ok: true, ...inicio });
+    }
+    const resultado = await furos.gerarFuro({
       userId: req.session.userId,
       pauta: req.body?.pauta || {},
       facebookPageId: req.body?.facebookPageId || null,
@@ -553,6 +567,15 @@ router.post('/furos/gerar', async (req, res, next) => {
   } catch (err) {
     if (err.status) return res.status(err.status).json({ error: err.message });
     return next(err);
+  }
+});
+
+router.get('/furos/gerar/:jobId', (req, res) => {
+  try {
+    const status = require('../services/furosService').statusGeracao(req.session.userId, req.params.jobId);
+    return res.status(status.estado === 'gerando' ? 202 : 200).json({ ok: true, ...status });
+  } catch (err) {
+    return res.status(err.status || 500).json({ error: err.message });
   }
 });
 

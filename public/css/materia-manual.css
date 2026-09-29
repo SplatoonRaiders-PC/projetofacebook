@@ -534,3 +534,19 @@ body.mia-furos-aberto { overflow: hidden; }
   .mia-manual-claude .mia-furos-acoes { width: 100%; }
   .mia-manual-claude .mia-furos-acoes button { flex: 1; }
 }
+
+/* Furos do dia — onde procurar (Notícias, YouTube, Instagram, Facebook) e quantidade */
+.mia-manual-claude .mia-furos-canais { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; }
+.mia-manual-claude .mia-furos-canais-rotulo { margin-right: .15rem; color: var(--mia-chat-muted); font-size: .72rem; font-weight: 600; }
+.mia-manual-claude .mia-furos-qtd select {
+  padding: .45rem .6rem; border: 1px solid var(--mia-chat-border); border-radius: .6rem;
+  background: rgb(255 255 255 / 3%); color: var(--mia-chat-text); font-size: .76rem;
+}
+.mia-manual-claude .mia-furo-canal {
+  display: inline-block; margin-right: .35rem; padding: .05rem .4rem; border-radius: .35rem;
+  font-size: .64rem; font-weight: 700; letter-spacing: .02em; vertical-align: 1px;
+  background: rgb(148 163 184 / 16%); color: #cbd5e1;
+}
+.mia-manual-claude .mia-furo-canal.is-youtube { background: rgb(239 68 68 / 16%); color: #fca5a5; }
+.mia-manual-claude .mia-furo-canal.is-instagram { background: rgb(236 72 153 / 16%); color: #f9a8d4; }
+.mia-manual-claude .mia-furo-canal.is-facebook { background: rgb(59 130 246 / 16%); color: #93c5fd; }

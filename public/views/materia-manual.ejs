@@ -1,6 +1,6 @@
 <%- include('partials/app-start') %>
   <link rel="stylesheet" href="/css/materia-chat.css?v=20260902tomTitulosClaude1" />
-  <link rel="stylesheet" href="/css/materia-manual.css?v=20260929furos1" />
+  <link rel="stylesheet" href="/css/materia-manual.css?v=20260929furos2" />
   <link rel="stylesheet" href="/css/feed-sugerido.css?v=20260927feed4" />
 
   <main class="mia-chat mia-manual-claude" data-recolher-menu>
@@ -87,7 +87,7 @@
             <div class="mia-start-actions" aria-label="Como começar sua matéria">
               <button type="button" class="mia-furos-open mia-start-featured" aria-haspopup="dialog" aria-controls="furos-dialog">
                 <span aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22c4 0 7-3 7-7 0-3-1.5-5.5-4-8-1 3-2.5 4-4 5 0-4-2-7-4-9 0 4-3 6-3 11 0 4.5 3.5 8 8 8Z"/></svg></span>
-                <strong>Furos do dia</strong><small>As notícias mais quentes do Google News no seu nicho viram várias matérias prontas para o Facebook</small>
+                <strong>Furos do dia</strong><small>O que está bombando no Google News, YouTube, Instagram e Facebook no seu nicho vira várias matérias prontas para o Facebook</small>
               </button>
               <button type="button" data-start-matter="link">
                 <span aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></svg></span>
@@ -369,9 +369,9 @@
         <section id="furos-dialog" class="mia-furos" role="dialog" aria-modal="true" aria-labelledby="furos-titulo" hidden>
           <header class="mia-furos-head">
             <div>
-              <p class="mia-furos-eyebrow">Google News · agora</p>
+              <p class="mia-furos-eyebrow">Google News · YouTube · Instagram · Facebook</p>
               <h2 id="furos-titulo">Furos do dia</h2>
-              <p class="mia-furos-sub">Escolha o nicho, veja o que está bombando e gere várias matérias de uma vez.</p>
+              <p class="mia-furos-sub">Escolha o nicho e as fontes, veja o que está bombando e gere várias matérias de uma vez.</p>
             </div>
             <button type="button" id="furos-fechar" class="mia-chat-icon-btn" aria-label="Fechar">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>
@@ -380,12 +380,27 @@
 
           <div class="mia-furos-filtros">
             <div class="mia-furos-nichos" id="furos-nichos" role="group" aria-label="Nichos"></div>
+            <div class="mia-furos-canais" role="group" aria-label="Onde procurar">
+              <span class="mia-furos-canais-rotulo">Procurar em</span>
+              <button type="button" class="mia-furos-chip is-active" data-furos-canal="noticias" aria-pressed="true" title="Google News: portais e veículos">Notícias</button>
+              <button type="button" class="mia-furos-chip is-active" data-furos-canal="youtube" aria-pressed="true" title="Vídeos recentes do nicho no YouTube, ordenados também por visualizações">YouTube</button>
+              <button type="button" class="mia-furos-chip is-active" data-furos-canal="instagram" aria-pressed="true" title="Posts recentes dos perfis que a Biblioteca monitora">Instagram</button>
+              <button type="button" class="mia-furos-chip is-active" data-furos-canal="facebook" aria-pressed="true" title="Posts recentes das páginas que a Biblioteca monitora">Facebook</button>
+            </div>
             <div class="mia-furos-linha">
               <div class="mia-chat-seg" role="group" aria-label="Período">
                 <button type="button" class="mia-chat-seg-btn" data-furos-horas="12" aria-pressed="false">12h</button>
                 <button type="button" class="mia-chat-seg-btn is-active" data-furos-horas="24" aria-pressed="true">24h</button>
                 <button type="button" class="mia-chat-seg-btn" data-furos-horas="48" aria-pressed="false">48h</button>
               </div>
+              <label class="mia-furos-qtd">
+                <span class="sr-only">Quantidade de pautas</span>
+                <select id="furos-limite" title="Quantas pautas mostrar">
+                  <option value="15">15 pautas</option>
+                  <option value="25" selected>25 pautas</option>
+                  <option value="40">40 pautas</option>
+                </select>
+              </label>
               <button type="button" id="furos-buscar" class="mia-furos-buscar">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
                 Buscar furos
@@ -611,6 +626,6 @@
   </script>
   <script src="/js/materia-chat.js?v=20260928feedModelo1"></script>
   <script src="/js/materia-chat-extras.js?v=20260915radarAmpliado1"></script>
-  <script src="/js/materia-furos.js?v=20260929furos1"></script>
+  <script src="/js/materia-furos.js?v=20260929furos2"></script>
   <script src="/js/feed-sugerido.js?v=20260928feedModelo1"></script>
 <%- include('partials/app-end') %>

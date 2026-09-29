@@ -12,50 +12,50 @@ const NICHOS = Object.freeze([
   {
     id: 'politica',
     rotulo: 'Política',
-    consultas: ['Congresso Nacional votação', 'STF decisão ministro'],
-    palavras: ['politica', 'stf', 'congresso', 'senado', 'camara', 'deputado', 'senador', 'lula', 'bolsonaro', 'eleicao', 'eleicoes', 'governo', 'ministro'],
+    consultas: ['Congresso Nacional votação', 'STF decisão ministro', 'Senado aprova projeto', 'Câmara dos Deputados votação', 'governo Lula', 'Bolsonaro'],
+    palavras: ['politica', 'stf', 'congresso', 'senado', 'camara', 'deputado', 'senador', 'lula', 'bolsonaro', 'eleicao', 'eleicoes', 'governo', 'ministro', 'planalto', 'tse', 'pec', 'medida provisoria'],
   },
   {
     id: 'politica-fe',
     rotulo: 'Política e fé',
-    consultas: ['bancada evangélica', 'política evangélicos'],
-    palavras: ['bancada evangelica', 'frente parlamentar evangelica', 'evangelicos', 'voto evangelico'],
+    consultas: ['bancada evangélica', 'política evangélicos', 'frente parlamentar evangélica', 'deputado pastor', 'voto evangélico eleição', 'liberdade religiosa projeto'],
+    palavras: ['bancada evangelica', 'frente parlamentar evangelica', 'evangelicos', 'evangelico', 'voto evangelico', 'liberdade religiosa', 'pastor', 'cristaos'],
   },
   {
     id: 'igreja',
     rotulo: 'Igreja',
-    consultas: ['igreja evangélica', 'Assembleia de Deus'],
-    palavras: ['igreja', 'assembleia de deus', 'universal', 'batista', 'denominacao', 'culto', 'templo'],
+    consultas: ['igreja evangélica', 'Assembleia de Deus', 'Igreja Universal', 'igreja batista', 'igreja culto polêmica', 'templo igreja'],
+    palavras: ['igreja', 'igrejas', 'assembleia de deus', 'universal', 'batista', 'presbiteriana', 'denominacao', 'culto', 'templo', 'fieis', 'evangelica', 'evangelicos'],
   },
   {
     id: 'pastores',
     rotulo: 'Pastores',
-    consultas: ['pastor polêmica', 'pastor evangélico'],
-    palavras: ['pastor', 'pastora', 'apostolo', 'bispo', 'missionaria', 'lider evangelico'],
+    consultas: ['pastor polêmica', 'pastor evangélico', 'pastora', 'Silas Malafaia', 'bispo evangélico', 'apóstolo igreja'],
+    palavras: ['pastor', 'pastora', 'apostolo', 'bispo', 'missionaria', 'missionario', 'lider evangelico', 'malafaia', 'pregador', 'pregadora'],
   },
   {
     id: 'gospel',
     rotulo: 'Música gospel',
-    consultas: ['cantor gospel', 'cantora gospel'],
-    palavras: ['gospel', 'cantor', 'cantora', 'louvor', 'musica'],
+    consultas: ['cantor gospel', 'cantora gospel', 'música gospel', 'louvor gospel', 'show gospel', 'gospel lançamento'],
+    palavras: ['gospel', 'cantor', 'cantora', 'louvor', 'musica', 'adoracao', 'banda'],
   },
   {
     id: 'catolicos',
     rotulo: 'Igreja Católica',
-    consultas: ['Papa Vaticano', 'Igreja Católica padre'],
-    palavras: ['papa', 'vaticano', 'catolica', 'catolico', 'padre', 'cardeal'],
+    consultas: ['Papa Vaticano', 'Igreja Católica padre', 'Papa Leão XIV', 'CNBB', 'bispo católico', 'padre polêmica'],
+    palavras: ['papa', 'vaticano', 'catolica', 'catolico', 'catolicos', 'padre', 'cardeal', 'cnbb', 'leao xiv', 'nossa senhora', 'missa'],
   },
   {
     id: 'israel',
     rotulo: 'Israel e cristãos no mundo',
-    consultas: ['Israel guerra', 'cristãos perseguidos'],
-    palavras: ['israel', 'jerusalem', 'perseguidos', 'perseguicao', 'cristaos'],
+    consultas: ['Israel guerra', 'cristãos perseguidos', 'Israel Gaza', 'Jerusalém', 'perseguição religiosa', 'Oriente Médio conflito'],
+    palavras: ['israel', 'israelense', 'jerusalem', 'gaza', 'hamas', 'perseguidos', 'perseguicao', 'cristaos', 'oriente medio'],
   },
   {
     id: 'policia',
     rotulo: 'Polícia e justiça',
-    consultas: ['Polícia Federal operação', 'preso suspeito investigação'],
-    palavras: ['policia', 'preso', 'prisao', 'operacao', 'investigacao', 'crime', 'condenado'],
+    consultas: ['Polícia Federal operação', 'preso suspeito investigação', 'Polícia Civil prende', 'operação policial', 'condenado pela Justiça', 'crime investigação'],
+    palavras: ['policia', 'preso', 'presos', 'prisao', 'operacao', 'investigacao', 'crime', 'condenado', 'suspeito', 'delegado'],
   },
 ]);
 
@@ -301,10 +301,46 @@ function listarNichos() {
   return NICHOS.map(({ id, rotulo }) => ({ id, rotulo }));
 }
 
+const CANAIS = ['noticias', 'youtube', 'instagram', 'facebook'];
+
+function canaisValidos(canais) {
+  const lista = [...new Set((Array.isArray(canais) ? canais : []).map(String).filter((c) => CANAIS.includes(c)))];
+  return lista.length ? lista : [...CANAIS];
+}
+
+/**
+ * Ordem de entrada dos itens das redes: alterna YouTube, Instagram e
+ * Facebook e, dentro de cada rede, reparte entre os nichos.
+ */
+function alternarRedes(sociais, rotulos) {
+  const porCanal = new Map();
+  for (const item of sociais) {
+    if (!porCanal.has(item.canal)) porCanal.set(item.canal, []);
+    porCanal.get(item.canal).push(item);
+  }
+  for (const [canal, fila] of porCanal) {
+    const comNicho = fila.filter((i) => i.nicho);
+    const semNicho = fila.filter((i) => !i.nicho);
+    porCanal.set(canal, [...repartirPorNicho(comNicho, rotulos, comNicho.length), ...semNicho]);
+  }
+  const alternados = [];
+  while ([...porCanal.values()].some((fila) => fila.length)) {
+    for (const fila of porCanal.values()) if (fila.length) alternados.push(fila.shift());
+  }
+  return alternados;
+}
+
+/** Título claramente em espanhol (o YouTube mistura mesmo com idioma pt). */
+function pareceEspanhol(titulo) {
+  const t = String(titulo || '');
+  return !/[ãõç]/i.test(t) && /\b(por el|del|los|las|en el|y la|el pastor|la iglesia)\b/i.test(t);
+}
+
 /**
  * Busca e ordena. `nichos` vazio ou ['auto'] usa a escolha automática.
+ * `canais`: 'noticias' (Google News), 'youtube', 'instagram', 'facebook'.
  */
-async function buscarFuros({ userId, nichos = [], horas = 24, limite = 12 } = {}) {
+async function buscarFuros({ userId, nichos = [], horas = 24, limite = 12, canais = [] } = {}) {
   const automatico = !nichos.length || nichos.includes('auto');
   const ids = automatico ? await escolherNichosAutomaticos(userId) : nichosValidos(nichos);
   if (!ids.length) {
@@ -314,14 +350,32 @@ async function buscarFuros({ userId, nichos = [], horas = 24, limite = 12 } = {}
   }
 
   const selecionados = NICHOS.filter((n) => ids.includes(n.id));
+  const listaCanais = canaisValidos(canais);
+  const querNoticias = listaCanais.includes('noticias');
   const { radarPorTemas } = require('../routes/materiaChatExtras');
+  const { buscarFurosSociais } = require('./furosSociais');
   const janela = [12, 24, 48].includes(Number(horas)) ? Number(horas) : 24;
-  const [resultado, indiceDireto] = await Promise.all([
-    radarPorTemas(
-      selecionados.map((n) => ({ rotulo: n.rotulo, consultas: n.consultas })),
-      { horas: janela, limite: Math.max(limite * 2, 20), userId }
-    ),
-    indiceDeLinksDiretos(selecionados.flatMap((n) => n.consultas), janela).catch(() => []),
+  const vazio = { topicos: [], totalAnalisado: 0, totalOcultado: 0 };
+  const [resultado, indiceDireto, sociais] = await Promise.all([
+    querNoticias
+      ? radarPorTemas(
+          selecionados.map((n) => ({ rotulo: n.rotulo, consultas: n.consultas })),
+          // Seis buscas por nicho e sem reapurar todas as candidatas: só as que
+          // vão aparecer ganham link direto e foto (completarLinkEImagem).
+          { horas: janela, limite: Math.max(limite * 2, 30), userId, consultasPorTema: 6, apurar: false }
+        )
+      : vazio,
+    querNoticias
+      ? indiceDeLinksDiretos(selecionados.flatMap((n) => n.consultas.slice(0, 2)), janela).catch(() => [])
+      : [],
+    buscarFurosSociais({
+      userId,
+      canais: listaCanais.filter((c) => c !== 'noticias'),
+      consultas: selecionados.flatMap((n) => n.consultas.slice(0, 3).map((consulta) => ({ consulta, nicho: n.rotulo }))),
+      horas: janela,
+      limite,
+      pontuarBomba,
+    }).catch((err) => ({ itens: [], avisos: [err.message] })),
   ]);
 
   const agora = Date.now();
@@ -331,6 +385,7 @@ async function buscarFuros({ userId, nichos = [], horas = 24, limite = 12 } = {}
     .map((t) => {
       const { score, motivos } = pontuarBomba(t, agora);
       return {
+        canal: 'noticias',
         noNicho: pertenceAoNicho(t, nichoPorRotulo.get(t.tema)),
         titulo: String(t.titulo).replace(/\s+/g, ' ').trim().slice(0, 300),
         url: String(t.link || t.url).trim().slice(0, 1000),
@@ -348,21 +403,43 @@ async function buscarFuros({ userId, nichos = [], horas = 24, limite = 12 } = {}
     .sort((a, b) => b.score - a.score);
 
   // Pauta que não cita o nicho é ruído do Google; só completa uma lista curta.
+  const rotulos = selecionados.map((n) => n.rotulo);
+  // Vídeo do YouTube que não cita o nicho no título costuma ser ruído da busca.
+  const sociaisNoNicho = (sociais.itens || []).filter(
+    (item) =>
+      item.canal !== 'youtube' ||
+      (!pareceEspanhol(item.titulo) && (!item.nicho || pertenceAoNicho(item, nichoPorRotulo.get(item.nicho))))
+  );
+  // Redes ficam com até 40% das vagas; as notícias repartem o resto entre
+  // os nichos. Se faltar notícia, as redes completam a lista.
+  const redesEmOrdem = alternarRedes(sociaisNoNicho, rotulos);
+  const cotaRedes = querNoticias ? Math.min(redesEmOrdem.length, Math.ceil(limite * 0.4)) : Math.min(redesEmOrdem.length, limite);
+
   const doNicho = pontuados.filter((p) => p.noNicho);
   const foraDoNicho = pontuados.filter((p) => !p.noNicho);
-  const escolhidos = repartirPorNicho(doNicho, selecionados.map((n) => n.rotulo), limite);
-  const minimo = Math.min(limite, 5);
+  const vagasNoticias = limite - cotaRedes;
+  const escolhidos = repartirPorNicho(doNicho, rotulos, vagasNoticias);
+  const minimo = Math.min(vagasNoticias, 5);
   if (escolhidos.length < minimo) escolhidos.push(...foraDoNicho.slice(0, minimo - escolhidos.length));
-  escolhidos.sort((a, b) => b.score - a.score);
   for (const item of escolhidos) delete item.noNicho;
-  const furos = await emLotes(escolhidos, 4, (furo) => completarLinkEImagem(furo, indiceDireto));
 
+  const redesEscolhidas = redesEmOrdem.slice(0, limite - escolhidos.length);
+  const misturados = [...escolhidos, ...redesEscolhidas].sort((a, b) => b.score - a.score);
+  const furos = await emLotes(misturados, 8, (furo) =>
+    furo.canal === 'noticias' ? completarLinkEImagem(furo, indiceDireto) : furo
+  );
+
+  const porCanal = {};
+  for (const furo of furos) porCanal[furo.canal] = (porCanal[furo.canal] || 0) + 1;
   return {
     nichos: selecionados.map(({ id, rotulo }) => ({ id, rotulo })),
+    canais: listaCanais,
     automatico,
     horas: janela,
-    totalAnalisado: Number(resultado.totalAnalisado) || 0,
+    totalAnalisado: (Number(resultado.totalAnalisado) || 0) + (sociais.itens || []).length,
     totalOcultado: Number(resultado.totalOcultado) || 0,
+    porCanal,
+    avisos: sociais.avisos || [],
     furos,
   };
 }
@@ -416,8 +493,121 @@ async function gerarFuro({ userId, pauta = {}, facebookPageId = null } = {}) {
   };
 }
 
+/* ------------------------- vídeos e posts das redes ------------------------- */
+
+const CANAIS_DE_REDE = ['youtube', 'instagram', 'facebook'];
+const geracoes = new Map();
+const VALIDADE_GERACAO_MS = 2 * 60 * 60 * 1000;
+
+function ehPautaDeRede(pauta) {
+  return CANAIS_DE_REDE.includes(String(pauta?.canal || ''));
+}
+
+function limparGeracoesAntigas() {
+  const limite = Date.now() - VALIDADE_GERACAO_MS;
+  for (const [id, g] of geracoes) if (g.atualizadoEm < limite) geracoes.delete(id);
+}
+
+/**
+ * Vídeo/post das redes vira matéria pelo mesmo fluxo do chat (transcrição +
+ * redator editorial). Pode levar minutos, então roda em segundo plano e o
+ * painel acompanha por `statusGeracao`.
+ */
+async function iniciarGeracaoDeRede({ userId, pauta = {}, facebookPageId = null, modelo = null } = {}) {
+  const url = String(pauta.url || '').trim();
+  if (!/^https?:\/\//i.test(url)) {
+    const err = new Error('Pauta sem link válido.');
+    err.status = 400;
+    throw err;
+  }
+  const deepseekService = require('./deepseekService');
+  let modeloFinal = null;
+  if (deepseekService.usarTokenFree('conversa')) {
+    modeloFinal = await require('./materiaModelosService').resolverModelo(modelo, { estrito: true });
+  }
+  let pageId = facebookPageId;
+  if (!pageId) {
+    const { defaultPageIdForUser } = require('./facebookPageResolver');
+    pageId = await defaultPageIdForUser(userId).catch(() => null);
+  }
+
+  limparGeracoesAntigas();
+  const id = require('crypto').randomUUID();
+  const geracao = { id, userId: Number(userId), estado: 'gerando', etapa: 'Lendo o link…', atualizadoEm: Date.now() };
+  geracoes.set(id, geracao);
+
+  setImmediate(async () => {
+    try {
+      const { escreverPeloChat } = require('./materiaPorChat');
+      const { matterId, chatId } = await escreverPeloChat(
+        { chatService: require('./materiaChatService'), comModelo: require('./tokenFreeGatewayService').comModelo },
+        {
+          userId,
+          url,
+          facebookPageId: pageId || null,
+          imagemUrl: pauta.imagem,
+          modelo: modeloFinal,
+          onPasso: (texto) => {
+            geracao.etapa = String(texto).slice(0, 200);
+            geracao.atualizadoEm = Date.now();
+          },
+        }
+      );
+      if (pauta.bibliotecaPostId && matterId) {
+        await require('../models/BibliotecaPosts')
+          .update(Number(pauta.bibliotecaPostId), { status: 'rascunho', matter_id: matterId })
+          .catch(() => {});
+      }
+      try {
+        const titulo = String(pauta.titulo || '').replace(/\[\[|\]\]|\*\*/g, '').trim();
+        await require('./materiaChatService').renomearConversa({
+          userId,
+          chatId,
+          titulo: `Furo ${pauta.canal} · ${titulo}`.slice(0, 180),
+        });
+      } catch {
+        // nome da conversa é só conveniência
+      }
+      Object.assign(geracao, {
+        estado: matterId ? 'ok' : 'erro',
+        matterId,
+        redirect: matterId ? `/materias-ia/${matterId}` : null,
+        erro: matterId ? null : 'A matéria não foi salva.',
+      });
+    } catch (err) {
+      console.warn(`[furos] ${pauta.canal} ${url}:`, err.message);
+      Object.assign(geracao, { estado: 'erro', erro: err.message || 'Falha ao escrever a matéria.' });
+    } finally {
+      geracao.atualizadoEm = Date.now();
+    }
+  });
+
+  return { jobId: id, estado: geracao.estado, etapa: geracao.etapa };
+}
+
+function statusGeracao(userId, jobId) {
+  const g = geracoes.get(String(jobId || ''));
+  if (!g || g.userId !== Number(userId)) {
+    const err = new Error('Geração não encontrada ou expirada (o servidor pode ter reiniciado).');
+    err.status = 404;
+    throw err;
+  }
+  return {
+    jobId: g.id,
+    estado: g.estado,
+    etapa: g.etapa,
+    matterId: g.matterId || null,
+    redirect: g.redirect || null,
+    erro: g.erro || null,
+  };
+}
+
 module.exports = {
   NICHOS,
+  CANAIS,
+  ehPautaDeRede,
+  iniciarGeracaoDeRede,
+  statusGeracao,
   listarNichos,
   escolherNichosAutomaticos,
   pontuarBomba,

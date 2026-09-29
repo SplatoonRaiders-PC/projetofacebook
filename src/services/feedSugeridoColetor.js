@@ -524,4 +524,5 @@ module.exports = {
   idDoVideoFacebook,
   videosDoHtmlFacebook,
   pedirSeguindoRedirects,
+  cookieHeaderDoYoutube,
 };
