@@ -440,9 +440,13 @@
         .map(([canal, total]) => `${total} ${canal === 'noticias' ? 'notícias' : ROTULO_CANAL[canal] || canal}`)
         .join(', ');
       const avisos = (data.avisos || []).length ? ` · ${data.avisos.join(' · ')}` : '';
+      const portaisLidos = (data.portais || []).filter((p) => !p.erro && p.itens > 0).length;
+      const varredura = data.totalAnalisado
+        ? ` · ${data.totalAnalisado} notícias analisadas${portaisLidos ? ` (Google News + ${portaisLidos} portais)` : ''}`
+        : '';
       setStatus(
         state.furos.length
-          ? `${state.furos.length} pautas em ${nichos}${porCanal ? ` (${porCanal})` : ''} · últimas ${data.horas}h${data.totalOcultado ? ` · ${data.totalOcultado} já viraram matéria e foram escondidas` : ''}${avisos}.`
+          ? `${state.furos.length} pautas em ${nichos}${porCanal ? ` (${porCanal})` : ''} · últimas ${data.horas}h${varredura}${data.totalOcultado ? ` · ${data.totalOcultado} já viraram matéria e foram escondidas` : ''}${avisos}.`
           : `Nada novo em ${nichos} nas últimas ${data.horas}h. Tente 48h, outro nicho ou mais fontes.${avisos}`,
         state.furos.length ? '' : 'aviso'
       );

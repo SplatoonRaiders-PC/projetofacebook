@@ -527,6 +527,16 @@ router.get('/furos/nichos', async (req, res, next) => {
   }
 });
 
+/** Situação dos portais lidos direto (feed/WordPress). Usa o mesmo cache. */
+router.get('/furos/portais', async (_req, res, next) => {
+  try {
+    const { statusDosPortais } = require('../services/portaisNichoService');
+    return res.json({ ok: true, portais: await statusDosPortais() });
+  } catch (err) {
+    return next(err);
+  }
+});
+
 router.post('/furos/buscar', async (req, res, next) => {
   try {
     const body = req.body || {};

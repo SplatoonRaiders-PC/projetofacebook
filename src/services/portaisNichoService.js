@@ -1,0 +1,254 @@
+const axios = require('axios');
+
+/**
+ * Portais do nicho (gospel e política) lidos direto pelo feed RSS ou pela API
+ * pública do WordPress. Complementa o Google News com links diretos, foto e
+ * data, sem navegador e sem VNC.
+ *
+ * Proteção de carga: cada portal é lido no máximo uma vez a cada CACHE_MS,
+ * com no máximo LEITURAS_SIMULTANEAS ao mesmo tempo, tempo limite curto e
+ * tamanho máximo de resposta. O piloto automático que varre a cada 5 minutos
+ * reaproveita o cache em vez de bater nos sites de novo.
+ */
+
+const CACHE_MS = 10 * 60 * 1000;
+const ERRO_CACHE_MS = 3 * 60 * 1000;
+const TIMEOUT_MS = 10_000;
+const LEITURAS_SIMULTANEAS = 4;
+const MAX_BYTES = 3 * 1024 * 1024;
+const MAX_ITENS_POR_PORTAL = 40;
+const USER_AGENT =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36';
+
+/**
+ * `nichos`: ids de furosService.NICHOS. Um portal só entra na busca quando
+ * algum nicho escolhido está na lista dele.
+ * `tipo`: 'rss' (feed) ou 'wp' (API do WordPress, para quem bloqueia o feed).
+ * `especializado`: portal só do nicho gospel. As notícias dele valem para o
+ * nicho mesmo sem a palavra-chave no título; nos portais gerais, precisam citar.
+ * Portal que bloqueia robôs (ex.: Comunhão responde 403) fica de fora.
+ */
+const PORTAIS = Object.freeze([
+  { id: 'guiame', nome: 'Guiame', tipo: 'rss', url: 'https://guiame.com.br/rss', especializado: true, nichos: ['igreja', 'pastores', 'gospel', 'politica-fe', 'israel'] },
+  { id: 'fuxicogospel', nome: 'O Fuxico Gospel', tipo: 'wp', url: 'https://www.fuxicogospel.com.br', especializado: true, nichos: ['gospel', 'pastores', 'igreja'] },
+  { id: 'gospelprime', nome: 'Gospel Prime', tipo: 'wp', url: 'https://www.gospelprime.com.br', especializado: true, nichos: ['igreja', 'pastores', 'politica-fe', 'israel', 'gospel'] },
+  { id: 'gospelmais', nome: 'Gospel Mais', tipo: 'rss', url: 'https://noticias.gospelmais.com.br/feed', especializado: true, nichos: ['gospel', 'igreja', 'pastores', 'politica-fe'] },
+  { id: 'folhagospel', nome: 'Folha Gospel', tipo: 'rss', url: 'https://folhagospel.com/feed/', especializado: true, nichos: ['gospel', 'igreja', 'pastores'] },
+  { id: 'pleno', nome: 'Pleno News', tipo: 'rss', url: 'https://pleno.news/feed', nichos: ['politica', 'politica-fe', 'igreja', 'pastores', 'israel'] },
+  { id: 'conexaopolitica', nome: 'Conexão Política', tipo: 'rss', url: 'https://conexaopolitica.com.br/feed/', nichos: ['politica', 'politica-fe'] },
+  { id: 'revistaoeste', nome: 'Revista Oeste', tipo: 'rss', url: 'https://revistaoeste.com/feed/', nichos: ['politica', 'politica-fe'] },
+  { id: 'gazetadopovo', nome: 'Gazeta do Povo', tipo: 'rss', url: 'https://www.gazetadopovo.com.br/feed/rss/ultimas-noticias.xml', nichos: ['politica', 'politica-fe', 'igreja', 'catolicos'] },
+  { id: 'poder360', nome: 'Poder360', tipo: 'rss', url: 'https://www.poder360.com.br/feed/', nichos: ['politica'] },
+  { id: 'cnnbrasil', nome: 'CNN Brasil', tipo: 'rss', url: 'https://www.cnnbrasil.com.br/feed/', nichos: ['politica', 'policia'] },
+  { id: 'metropoles', nome: 'Metrópoles', tipo: 'rss', url: 'https://www.metropoles.com/feed', nichos: ['politica', 'policia'] },
+  { id: 'terrabrasil', nome: 'Terra Brasil Notícias', tipo: 'rss', url: 'https://www.terrabrasilnoticias.com/feed/', nichos: ['politica', 'politica-fe'] },
+]);
+
+const cache = new Map();
+const emAndamento = new Map();
+let ativos = 0;
+const fila = [];
+
+function comVaga(tarefa) {
+  return new Promise((resolve, reject) => {
+    const rodar = () => {
+      ativos += 1;
+      Promise.resolve()
+        .then(tarefa)
+        .then(resolve, reject)
+        .finally(() => {
+          ativos -= 1;
+          fila.shift()?.();
+        });
+    };
+    if (ativos < LEITURAS_SIMULTANEAS) rodar();
+    else fila.push(rodar);
+  });
+}
+
+function decodificar(texto) {
+  return String(texto || '')
+    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
+    .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCodePoint(parseInt(n, 16)))
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;|&#39;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&');
+}
+
+function semHtml(texto) {
+  return decodificar(texto).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Rodapés que o WordPress e os portais põem no resumo do feed ("Leia a
+ * matéria completa em Gospelmais", "O post … apareceu primeiro em …"). Eles
+ * citam o nome do portal e faziam a notícia parecer do nicho errado.
+ */
+function semRodapeDoFeed(texto) {
+  return String(texto || '')
+    .replace(/\s*(leia (a matéria|mais|o texto) completa?( em)?|continue lendo( em)?)\b[\s\S]*$/i, '')
+    .replace(/\s*(o post|the post)\b[\s\S]*?(apareceu primeiro em|appeared first on)[\s\S]*$/i, '')
+    .replace(/\s*\[(…|\.\.\.)\]\s*$/, '')
+    .trim();
+}
+
+function tag(bloco, nome) {
+  const m = bloco.match(new RegExp(`<${nome}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${nome}>`, 'i'));
+  return m ? m[1] : '';
+}
+
+function urlValida(url) {
+  return /^https?:\/\//i.test(String(url || '').trim());
+}
+
+function imagemDoItemRss(bloco) {
+  const candidatos = [
+    bloco.match(/<media:content[^>]+url=["']([^"']+)["'][^>]*>/i)?.[1],
+    bloco.match(/<media:thumbnail[^>]+url=["']([^"']+)["']/i)?.[1],
+    bloco.match(/<enclosure[^>]+url=["']([^"']+)["'][^>]*type=["']image/i)?.[1],
+    bloco.match(/<enclosure[^>]+type=["']image[^"']*["'][^>]*url=["']([^"']+)["']/i)?.[1],
+    decodificar(tag(bloco, 'content:encoded') || tag(bloco, 'description')).match(/<img[^>]+src=["']([^"']+)["']/i)?.[1],
+  ];
+  return candidatos.map((url) => decodificar(url || '').trim()).find(urlValida) || null;
+}
+
+function lerRss(xml, portal) {
+  const blocos = String(xml || '').match(/<item[\s>][\s\S]*?<\/item>/gi) || [];
+  return blocos.slice(0, MAX_ITENS_POR_PORTAL).map((bloco) => {
+    const data = semHtml(tag(bloco, 'pubDate') || tag(bloco, 'dc:date'));
+    return {
+      titulo: semHtml(tag(bloco, 'title')).slice(0, 300),
+      link: semHtml(tag(bloco, 'link')) || semHtml(tag(bloco, 'guid')),
+      resumo: semRodapeDoFeed(semHtml(tag(bloco, 'description'))).slice(0, 400),
+      data: data || null,
+      dataTimestamp: Date.parse(data) || null,
+      imagem: imagemDoItemRss(bloco),
+      veiculo: portal.nome,
+    };
+  });
+}
+
+function lerWordPress(posts, portal) {
+  return (Array.isArray(posts) ? posts : []).slice(0, MAX_ITENS_POR_PORTAL).map((post) => {
+    const data = post?.date_gmt ? `${post.date_gmt}Z` : post?.date || null;
+    const imagem =
+      post?.jetpack_featured_media_url ||
+      post?.yoast_head_json?.og_image?.[0]?.url ||
+      post?._embedded?.['wp:featuredmedia']?.[0]?.source_url ||
+      null;
+    return {
+      titulo: semHtml(post?.title?.rendered).slice(0, 300),
+      link: String(post?.link || '').trim(),
+      resumo: semRodapeDoFeed(semHtml(post?.excerpt?.rendered)).slice(0, 400),
+      data,
+      dataTimestamp: Date.parse(data) || null,
+      imagem: urlValida(imagem) ? imagem : null,
+      veiculo: portal.nome,
+    };
+  });
+}
+
+async function baixarPortal(portal) {
+  const wp = portal.tipo === 'wp';
+  const url = wp
+    ? `${portal.url}/wp-json/wp/v2/posts?per_page=25&_fields=title,link,date,date_gmt,excerpt,jetpack_featured_media_url,yoast_head_json.og_image`
+    : portal.url;
+  const { data } = await axios.get(url, {
+    timeout: TIMEOUT_MS,
+    maxContentLength: MAX_BYTES,
+    maxRedirects: 3,
+    responseType: wp ? 'json' : 'text',
+    headers: {
+      'User-Agent': USER_AGENT,
+      Accept: wp ? 'application/json' : 'application/rss+xml, application/xml, text/xml;q=0.9, */*;q=0.5',
+    },
+  });
+  const itens = (wp ? lerWordPress(data, portal) : lerRss(data, portal))
+    .filter((item) => item.titulo && urlValida(item.link));
+  if (!itens.length) throw new Error('feed sem itens');
+  return itens;
+}
+
+/** Lê um portal respeitando cache e limite de leituras simultâneas. */
+async function lerPortal(portal) {
+  const guardado = cache.get(portal.id);
+  if (guardado && guardado.expiraEm > Date.now()) return guardado;
+  if (emAndamento.has(portal.id)) return emAndamento.get(portal.id);
+
+  const leitura = comVaga(async () => {
+    const inicio = Date.now();
+    try {
+      const itens = await baixarPortal(portal);
+      return { itens, erro: null, lidoEm: Date.now(), ms: Date.now() - inicio, expiraEm: Date.now() + CACHE_MS };
+    } catch (err) {
+      // Portal fora do ar: guarda o erro por pouco tempo para não insistir a cada busca.
+      const anterior = cache.get(portal.id);
+      return {
+        itens: anterior?.itens || [],
+        erro: err.response?.status ? `HTTP ${err.response.status}` : err.code || err.message,
+        lidoEm: Date.now(),
+        ms: Date.now() - inicio,
+        expiraEm: Date.now() + ERRO_CACHE_MS,
+      };
+    }
+  }).then((resultado) => {
+    cache.set(portal.id, resultado);
+    if (resultado.erro) console.warn(`[portais] ${portal.nome}: ${resultado.erro}`);
+    return resultado;
+  }).finally(() => emAndamento.delete(portal.id));
+
+  emAndamento.set(portal.id, leitura);
+  return leitura;
+}
+
+function portaisDosNichos(idsNichos) {
+  const alvo = new Set(idsNichos || []);
+  return PORTAIS.filter((portal) => portal.nichos.some((id) => alvo.has(id)));
+}
+
+/**
+ * Itens recentes dos portais ligados aos nichos, com o id do portal.
+ * Nunca lança erro: portal que falha só não contribui.
+ */
+async function buscarNosPortais({ nichos = [], horas = 24 } = {}) {
+  const portais = portaisDosNichos(nichos);
+  const limite = Date.now() - Number(horas || 24) * 3_600_000;
+  const leituras = await Promise.all(portais.map((portal) => lerPortal(portal).then((r) => ({ portal, ...r }))));
+  const itens = [];
+  const status = [];
+  for (const { portal, itens: lista, erro, ms } of leituras) {
+    const recentes = lista.filter((item) => !item.dataTimestamp || item.dataTimestamp >= limite);
+    status.push({ id: portal.id, nome: portal.nome, itens: recentes.length, erro, ms });
+    for (const item of recentes) {
+      itens.push({ ...item, portal: portal.id, portalNichos: portal.nichos, especializado: Boolean(portal.especializado) });
+    }
+  }
+  return { itens, status };
+}
+
+/** Situação de cada portal (para o administrador acompanhar). */
+async function statusDosPortais() {
+  const leituras = await Promise.all(PORTAIS.map((portal) => lerPortal(portal).then((r) => ({ portal, ...r }))));
+  return leituras.map(({ portal, itens, erro, lidoEm, ms }) => ({
+    id: portal.id,
+    nome: portal.nome,
+    tipo: portal.tipo,
+    nichos: portal.nichos,
+    itens: itens.length,
+    erro,
+    lidoEm: new Date(lidoEm).toISOString(),
+    ms,
+  }));
+}
+
+module.exports = {
+  PORTAIS,
+  buscarNosPortais,
+  statusDosPortais,
+  lerRss,
+  lerWordPress,
+};

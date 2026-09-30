@@ -37,7 +37,9 @@ const NICHOS = Object.freeze([
     id: 'gospel',
     rotulo: 'Música gospel',
     consultas: ['cantor gospel', 'cantora gospel', 'música gospel', 'louvor gospel', 'show gospel', 'gospel lançamento'],
-    palavras: ['gospel', 'cantor', 'cantora', 'louvor', 'musica', 'adoracao', 'banda'],
+    // "gospel" sozinho não serve: todo portal do nicho usa a palavra. Aqui
+    // valem só termos do universo musical.
+    palavras: ['cantor', 'cantora', 'louvor', 'musica', 'adoracao', 'banda', 'album', 'clipe', 'single', 'show'],
   },
   {
     id: 'catolicos',
@@ -330,6 +332,85 @@ function alternarRedes(sociais, rotulos) {
   return alternados;
 }
 
+/**
+ * Junta as notícias dos portais do nicho às do Google News. A mesma história
+ * vira uma pauta só (mais veículos = nota maior) e, quando o Google só tinha o
+ * link dele, passa a usar o link direto e a foto do portal.
+ */
+const NICHOS_GENERICOS_DE_PORTAL = ['igreja', 'pastores', 'politica-fe'];
+
+function mesclarPortais(pontuados, itensPortal, selecionados, agora) {
+  const { titulosSimilares } = require('./newsResearch');
+  // A nota das pautas do Google já inclui sinais que não ficam guardados
+  // (ex.: "Em alta no Google"); por isso a fusão só soma, não recalcula.
+  const somarMotivo = (alvo, motivo, substituir = null) => {
+    const resto = (alvo.motivos || []).filter((m) => m !== motivo && !(substituir && substituir.test(m)));
+    alvo.motivos = [motivo, ...resto].slice(0, 4);
+  };
+  const somarVeiculo = (alvo, veiculo) => {
+    const antes = new Set([alvo.veiculo, ...(alvo.veiculos || [])].filter(Boolean));
+    if (!veiculo || antes.has(veiculo)) return;
+    alvo.veiculos = [...antes, veiculo].slice(0, 5);
+    alvo.score = Math.min(100, alvo.score + 6);
+    somarMotivo(alvo, `${antes.size + 1} veículos`, /^\d+ veículos$/);
+  };
+  const marcarPortalDoNicho = (alvo) => {
+    if ((alvo.motivos || []).includes('Portal do nicho')) return;
+    alvo.score = Math.min(100, alvo.score + 6);
+    somarMotivo(alvo, 'Portal do nicho');
+  };
+
+  const novos = [];
+  for (const item of itensPortal) {
+    // Portal geral (CNN, Metrópoles…) publica de tudo: o nicho precisa estar
+    // no título. No portal gospel, título ou resumo bastam; sem palavra-chave,
+    // a notícia só entra num nicho genérico, nunca em Música gospel ou Israel.
+    const texto = item.especializado ? item : { titulo: item.titulo };
+    const nicho =
+      selecionados.find((n) => pertenceAoNicho(texto, n)) ||
+      (item.especializado
+        ? selecionados.find((n) => NICHOS_GENERICOS_DE_PORTAL.includes(n.id) && item.portalNichos.includes(n.id))
+        : null);
+    if (!nicho) continue;
+
+    const existente = [...pontuados, ...novos].find((p) => titulosSimilares(p.titulo, item.titulo));
+    if (existente) {
+      const linkDoGoogle = EH_LINK_GOOGLE.test(existente.url);
+      somarVeiculo(existente, item.veiculo);
+      if (linkDoGoogle) {
+        // Link, veículo e foto passam juntos para o portal: o crédito precisa
+        // citar a mesma matéria de onde veio a foto.
+        existente.url = item.link;
+        existente.veiculo = item.veiculo;
+        existente.imagem = item.imagem || null;
+      }
+      if (item.especializado) marcarPortalDoNicho(existente);
+      continue;
+    }
+
+    const { score, motivos } = pontuarBomba(item, agora);
+    const novo = {
+      canal: 'noticias',
+      noNicho: true,
+      titulo: item.titulo,
+      url: item.link,
+      veiculo: item.veiculo,
+      veiculos: [item.veiculo],
+      resumo: item.resumo,
+      imagem: item.imagem,
+      data: item.data,
+      dataTimestamp: item.dataTimestamp,
+      nicho: nicho.rotulo,
+      score,
+      motivos,
+    };
+    if (item.especializado) marcarPortalDoNicho(novo);
+    novos.push(novo);
+  }
+
+  return [...pontuados, ...novos].sort((a, b) => b.score - a.score);
+}
+
 /** Título claramente em espanhol (o YouTube mistura mesmo com idioma pt). */
 function pareceEspanhol(titulo) {
   const t = String(titulo || '');
@@ -361,7 +442,8 @@ async function buscarFuros({ userId, nichos = [], horas = 24, limite = 12, canai
   const { buscarFurosSociais } = require('./furosSociais');
   const janela = [12, 24, 48].includes(Number(horas)) ? Number(horas) : 24;
   const vazio = { topicos: [], totalAnalisado: 0, totalOcultado: 0 };
-  const [resultado, indiceDireto, sociais] = await Promise.all([
+  const { buscarNosPortais } = require('./portaisNichoService');
+  const [resultado, indiceDireto, sociais, portais] = await Promise.all([
     querNoticias
       ? radarPorTemas(
           selecionados.map((n) => ({ rotulo: n.rotulo, consultas: n.consultas })),
@@ -381,11 +463,15 @@ async function buscarFuros({ userId, nichos = [], horas = 24, limite = 12, canai
       limite,
       pontuarBomba,
     }).catch((err) => ({ itens: [], avisos: [err.message] })),
+    // Portais gospel e de política lidos direto (feed/WordPress), com cache.
+    querNoticias
+      ? buscarNosPortais({ nichos: selecionados.map((n) => n.id), horas: janela }).catch(() => ({ itens: [], status: [] }))
+      : { itens: [], status: [] },
   ]);
 
   const agora = Date.now();
   const nichoPorRotulo = new Map(selecionados.map((n) => [n.rotulo, n]));
-  const pontuados = (resultado.topicos || [])
+  const doGoogle = (resultado.topicos || [])
     .filter((t) => t && t.titulo && (t.link || t.url))
     .map((t) => {
       const { score, motivos } = pontuarBomba(t, agora);
@@ -406,6 +492,7 @@ async function buscarFuros({ userId, nichos = [], horas = 24, limite = 12, canai
       };
     })
     .sort((a, b) => b.score - a.score);
+  const pontuados = mesclarPortais(doGoogle, portais.itens || [], selecionados, agora);
 
   // Pauta que não cita o nicho é ruído do Google; só completa uma lista curta.
   const rotulos = selecionados.map((n) => n.rotulo);
@@ -443,7 +530,9 @@ async function buscarFuros({ userId, nichos = [], horas = 24, limite = 12, canai
     canais: listaCanais,
     automatico,
     horas: janela,
-    totalAnalisado: (Number(resultado.totalAnalisado) || 0) + (sociais.itens || []).length,
+    totalAnalisado:
+      (Number(resultado.totalAnalisado) || 0) + (sociais.itens || []).length + (portais.itens || []).length,
+    portais: (portais.status || []).map(({ nome, itens, erro }) => ({ nome, itens, erro })),
     totalOcultado: Number(resultado.totalOcultado) || 0,
     porCanal,
     avisos: sociais.avisos || [],
@@ -621,4 +710,5 @@ module.exports = {
   buscarFuros,
   gerarFuro,
   linkDiretoPeloTitulo,
+  mesclarPortais,
 };
