@@ -653,3 +653,14 @@ body.mia-furos-aberto { overflow: hidden; }
    o rodapé com "Gerar matérias" fica sempre visível. */
 .mia-manual-claude .mia-furos { overflow-y: auto; scrollbar-width: thin; scrollbar-color: rgb(255 255 255 / 12%) transparent; }
 .mia-manual-claude .mia-furos-foot { position: sticky; bottom: 0; z-index: 2; }
+
+/* Furos do dia — depois de gerar: publicar em fila (intervalo) ou só rascunho */
+.mia-manual-claude .mia-furos-publicar { display: flex; flex-wrap: wrap; align-items: flex-end; gap: .5rem .7rem; flex: 1 1 22rem; min-width: 0; }
+.mia-manual-claude .mia-furos-publicar label > span { display: block; margin-bottom: .2rem; color: var(--mia-chat-muted); font-size: .66rem; font-weight: 600; }
+.mia-manual-claude .mia-furos-publicar select {
+  padding: .42rem .55rem; border: 1px solid var(--mia-chat-border); border-radius: .55rem;
+  background: rgb(255 255 255 / 3%); color: var(--mia-chat-text); font-size: .76rem; max-width: 13rem;
+}
+.mia-manual-claude .mia-furos-publicar [hidden] { display: none; }
+.mia-manual-claude .mia-furos-publicar .mia-furos-aviso { flex: 1 1 100%; }
+.mia-manual-claude .mia-furo[data-estado="auto"] .mia-furo-resultado { color: #7dd3fc; }

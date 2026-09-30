@@ -55,10 +55,17 @@ function criarDb(tabelas) {
         return {
           first: async () => ({ n: linhas().length }),
           then: (ok, falha) => Promise.resolve(porStatus()).then(ok, falha),
+          catch: (falha) => Promise.resolve(porStatus()).catch(falha),
         };
       },
       async first() { const r = linhas()[0]; return r ? { ...r, ...(r.__c ? { foto_original_se_falhar: r.__c.foto_original_se_falhar } : {}) } : undefined; },
       then(ok, falha) { return Promise.resolve(linhas().map((r) => ({ ...r }))).then(ok, falha); },
+      catch(falha) { return Promise.resolve(linhas().map((r) => ({ ...r }))).catch(falha); },
+      async delete() {
+        const alvo = new Set(linhas().map((r) => r.id));
+        tabelas[tabela] = tabelas[tabela].filter((r) => !alvo.has(r.id));
+        return alvo.size;
+      },
       async update(dados) {
         const alvo = linhas();
         for (const r of alvo) {
@@ -102,7 +109,10 @@ function carregar({ imagem, avaliacoes = null, furos = [], gerarFuro = null, gat
     '../config/db': criarDb(tabelas),
     './furosService': {
       NICHOS: [{ id: 'igreja' }], CANAIS: ['noticias'],
-      buscarFuros: async () => ({ furos }),
+      buscarFuros: async (opcoes) => {
+        eventos.buscas = [...(eventos.buscas || []), opcoes];
+        return { furos };
+      },
       linkDiretoPeloTitulo: async () => null,
       gerarFuro: async ({ pauta }) => {
         eventos.peloFuro = (eventos.peloFuro || 0) + 1;
@@ -495,6 +505,150 @@ test('painel: mudar o modelo no chat avisa o piloto (e ignora o carregamento)', 
     window.document.dispatchEvent(new window.CustomEvent('materia:modelo-alterado')); // editor trocou
     await esperar(20);
     assert.deepEqual(trocas, ['gpt-5.6']);
+  } finally {
+    window.close();
+  }
+});
+
+test('varredura do piloto é leve e é pulada com a fila cheia', async () => {
+  const ctx = carregar({ imagem: () => esperar(5) });
+  const row = ctx.tabelas.furos_autopilot[0];
+  row.ultimo_scan_at = null;
+  await ctx.service.escanearAgora(1);
+  await esperar(20);
+  // Sem procurar link real e foto de cada pauta (isso fica para a que for escrita).
+  assert.equal(ctx.eventos.buscas.length, 1);
+  assert.equal(ctx.eventos.buscas[0].completar, false);
+
+  // Com 4 pautas esperando, a varredura normal é adiada.
+  row.ativo = false;
+  naFila(ctx.tabelas, 4);
+  row.ativo = true;
+  row.ultimo_scan_at = null;
+  row.proxima_postagem_at = new Date(Date.now() + 3_600_000);
+  await ctx.service.tick();
+  await esperar(30);
+  assert.equal(ctx.eventos.buscas.length, 1);
+  assert.match(String(row.ultimo_scan_resumo), /já esperando na fila; varredura adiada/);
+});
+
+test('painel só lista os últimos 3 dias e apaga recusadas antigas', async () => {
+  const ctx = carregar({ imagem: () => esperar(5) });
+  const antigo = new Date(Date.now() - 20 * 24 * 3_600_000);
+  ctx.tabelas.furos_autopilot_itens.push(
+    { id: 1, user_id: 1, chave: 'a', canal: 'noticias', titulo: 'Velha publicada', url: 'u', status: 'publicada', score: 1, created_at: antigo, updated_at: antigo },
+    { id: 2, user_id: 1, chave: 'b', canal: 'noticias', titulo: 'Recusada antiga', url: 'u', status: 'descartada', score: 1, created_at: antigo, updated_at: antigo },
+    { id: 3, user_id: 1, chave: 'c', canal: 'noticias', titulo: 'Nova publicada', url: 'u', status: 'publicada', score: 1, created_at: new Date(), updated_at: new Date() },
+  );
+  const status = await ctx.service.statusPainel(1);
+  assert.deepEqual(status.itens.map((i) => i.titulo), ['Nova publicada']);
+  await ctx.service.tick();
+  await esperar(20);
+  assert.ok(!ctx.tabelas.furos_autopilot_itens.some((i) => i.titulo === 'Recusada antiga'));
+});
+
+const PAUTAS_ESCOLHIDAS = [
+  { canal: 'noticias', titulo: 'Pastora condenada pelo 8 de janeiro deixa a prisão após dois anos', url: 'https://ex.test/m1', score: 30 },
+  { canal: 'noticias', titulo: 'Congresso recebe medida provisória que proíbe apostas esportivas', url: 'https://ex.test/m2', score: 20 },
+];
+
+test('fila escolhida: com o Automatizar desligado, escreve, gera imagem e publica no intervalo escolhido', async () => {
+  const ctx = carregar({ imagem: () => esperar(5) });
+  Object.assign(ctx.tabelas.furos_autopilot[0], { ativo: false, proxima_postagem_at: null });
+  const r = await ctx.service.enfileirarEscolhidas(1, { pautas: PAUTAS_ESCOLHIDAS, intervalo_minutos: 5, facebook_page_id: 7 });
+  assert.equal(r.adicionadas.length, 2);
+  assert.ok(ctx.tabelas.furos_autopilot_itens.every((i) => i.origem === 'manual'));
+  await rodar(ctx.service, 15);
+  // A primeira sai logo; a segunda espera os 5 minutos.
+  assert.equal(ctx.eventos.publicadas.length, 1);
+  const cfg = ctx.tabelas.furos_autopilot[0];
+  const espera = new Date(cfg.proxima_postagem_at).getTime() - Date.now();
+  assert.ok(espera > 4 * 60_000 && espera <= 5 * 60_000);
+  assert.equal(cfg.ativo, false);
+  cfg.proxima_postagem_at = new Date(Date.now() - 1000);
+  await rodar(ctx.service, 4);
+  assert.equal(ctx.eventos.publicadas.length, 2);
+  assert.ok(ctx.tabelas.furos_autopilot_itens.every((i) => i.status === 'publicada' && i.imagem_ia === true));
+  // Sem varredura: nada de busca com o Automatizar desligado.
+  assert.equal((ctx.eventos.buscas || []).length, 0);
+});
+
+test('pausado: só anda o que o editor escolheu; as pautas da IA esperam', async () => {
+  const ctx = carregar({ imagem: () => esperar(5) });
+  ctx.tabelas.furos_autopilot[0].ativo = false;
+  naFila(ctx.tabelas, 1); // escolhida pela IA (origem auto)
+  ctx.tabelas.furos_autopilot_itens[0].origem = 'auto';
+  await ctx.service.enfileirarEscolhidas(1, { pautas: [PAUTAS_ESCOLHIDAS[1]], intervalo_minutos: 10, facebook_page_id: 7 });
+  await rodar(ctx.service, 15);
+  const porOrigem = Object.fromEntries(ctx.tabelas.furos_autopilot_itens.map((i) => [i.origem, i.status]));
+  assert.equal(porOrigem.manual, 'publicada');
+  assert.equal(porOrigem.auto, 'na_fila');
+});
+
+test('cancelar a fila no meio da imagem não traz a pauta de volta', async () => {
+  const ctx = carregar({ imagem: () => esperar(120) });
+  ctx.tabelas.furos_autopilot[0].ativo = false;
+  await ctx.service.enfileirarEscolhidas(1, { pautas: [PAUTAS_ESCOLHIDAS[0]], intervalo_minutos: 10, facebook_page_id: 7 });
+  await rodar(ctx.service, 3);
+  assert.equal(ctx.tabelas.furos_autopilot_itens[0].status, 'gerando_imagem');
+  await ctx.service.cancelarFilaManual(1);
+  await esperar(200);
+  await rodar(ctx.service, 3);
+  assert.equal(ctx.tabelas.furos_autopilot_itens[0].status, 'descartada');
+  assert.equal(ctx.eventos.publicadas.length, 0);
+});
+
+test('pauta já publicada pelo piloto não entra de novo na fila escolhida', async () => {
+  const ctx = carregar({ imagem: () => esperar(5) });
+  const chave = ctx.service.chaveDaPauta(PAUTAS_ESCOLHIDAS[0]);
+  ctx.tabelas.furos_autopilot_itens.push({ id: 1, user_id: 1, chave, canal: 'noticias', titulo: 'x', url: 'u', status: 'publicada', score: 1, created_at: new Date(), updated_at: new Date() });
+  const r = await ctx.service.enfileirarEscolhidas(1, { pautas: [PAUTAS_ESCOLHIDAS[0]], intervalo_minutos: 10, facebook_page_id: 7 });
+  assert.equal(r.adicionadas.length, 0);
+  assert.match(r.ignoradas[0].motivo, /já foi publicada/);
+});
+
+test('Furos: "Publicar 1 a cada 5 min" manda as marcadas para a fila e acompanha até publicar', async () => {
+  const { JSDOM } = require('jsdom');
+  const html = fs.readFileSync(path.resolve(__dirname, '../public/views/materia-manual.ejs'), 'utf8');
+  const dom = new JSDOM(html, { runScripts: 'outside-only', url: 'https://example.test/materia-manual' });
+  const { window } = dom;
+  window.confirm = () => true;
+  const pedidos = [];
+  let consultasStatus = 0;
+  const pauta = { canal: 'noticias', titulo: 'Fato novo', url: 'https://ex.test/f', score: 30, motivos: [] };
+  window.fetch = async (url, options = {}) => {
+    if (options.body) pedidos.push({ url, corpo: JSON.parse(options.body) });
+    let data = {};
+    if (url.endsWith('/furos/nichos')) data = { nichos: [], sugeridos: [] };
+    else if (url.endsWith('/furos/buscar')) data = { furos: [pauta], nichos: [], horas: 24 };
+    else if (url.includes('/api/facebook/pages')) data = { pages: [{ id: 7, page_name: 'JM Notícia' }], default_facebook_page_id: 7 };
+    else if (url.endsWith('/furos/auto/fila')) data = { adicionadas: [{ id: 42, url: pauta.url, titulo: pauta.titulo }], ignoradas: [] };
+    else if (url.endsWith('/furos/auto')) {
+      consultasStatus += 1;
+      data = { config: { existe: true }, itens: [{ id: 42, status: 'publicada', publicado_at: new Date().toISOString(), matter_id: 9 }] };
+    }
+    return { ok: true, status: 200, json: async () => data };
+  };
+  try {
+    window.eval(fs.readFileSync(path.resolve(__dirname, '../public/js/materia-furos.js'), 'utf8'));
+    const doc = window.document;
+    doc.querySelector('.mia-furos-open').click();
+    await esperar(20);
+    doc.getElementById('furos-destino').value = '5';
+    doc.getElementById('furos-destino').dispatchEvent(new window.Event('change'));
+    doc.getElementById('furos-buscar').click();
+    await esperar(20);
+    doc.querySelector('.mia-furo-check').checked = true;
+    doc.querySelector('.mia-furo-check').dispatchEvent(new window.Event('change'));
+    assert.match(doc.getElementById('furos-gerar').textContent, /Gerar e publicar 1 matéria/);
+    doc.getElementById('furos-gerar').click();
+    await esperar(40);
+    const fila = pedidos.find((p) => p.url.endsWith('/furos/auto/fila'));
+    assert.equal(fila.corpo.intervalo_minutos, 5);
+    assert.equal(fila.corpo.facebook_page_id, '7');
+    assert.equal(fila.corpo.pautas[0].url, pauta.url);
+    assert.ok(consultasStatus >= 1);
+    assert.match(doc.querySelector('.mia-furo-resultado').textContent, /Publicada às/);
   } finally {
     window.close();
   }

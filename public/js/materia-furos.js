@@ -27,6 +27,10 @@
     top: document.getElementById('furos-top'),
     gerar: document.getElementById('furos-gerar'),
     horas: dialog.querySelectorAll('[data-furos-horas]'),
+    destino: document.getElementById('furos-destino'),
+    pagina: document.getElementById('furos-pagina'),
+    paginaCampo: document.getElementById('furos-pagina-campo'),
+    destinoAjuda: document.getElementById('furos-destino-ajuda'),
     canais: dialog.querySelectorAll('[data-furos-canal]'),
     limite: document.getElementById('furos-limite'),
   };
@@ -70,6 +74,8 @@
     el.backdrop.hidden = false;
     document.body.classList.add('mia-furos-aberto');
     if (!state.nichos.length) carregarNichos();
+    carregarPaginas();
+    atualizarDestino();
     el.buscar.focus();
   }
 
@@ -224,15 +230,65 @@
     return { rotulo: 'Morna', classe: 'is-morna' };
   }
 
+  const DESTINO_KEY = 'ViralizeAI.furosDestino';
+  const API_FILA = '/api/materias-ia/chat-extras/furos/auto';
+  let paginasCarregadas = false;
+  let timerFila = null;
+
+  function vaiPublicar() {
+    return el.destino && el.destino.value !== 'rascunho';
+  }
+
+  function atualizarDestino() {
+    const publicar = vaiPublicar();
+    if (el.paginaCampo) el.paginaCampo.hidden = !publicar;
+    if (el.destinoAjuda) {
+      el.destinoAjuda.textContent = publicar
+        ? 'Cada matéria é escrita, ganha imagem com IA e entra na fila de publicação. Roda no servidor: pode fechar a página.'
+        : 'Cada matéria é reescrita com texto e título próprios e fica como rascunho em Matérias salvas para você revisar.';
+    }
+    atualizarAcoes();
+  }
+
+  async function carregarPaginas() {
+    if (paginasCarregadas || !el.pagina) return;
+    try {
+      const data = await api('/api/facebook/pages');
+      const paginas = Array.isArray(data.pages) ? data.pages : [];
+      if (paginas.length) {
+        el.pagina.replaceChildren(...paginas.map((p) => {
+          const opcao = new Option(p.page_name || p.name || `Página ${p.id}`, String(p.id));
+          opcao.selected = Number(p.id) === Number(data.default_facebook_page_id);
+          return opcao;
+        }));
+      }
+      paginasCarregadas = true;
+    } catch {
+      // mantém "Página padrão"
+    }
+  }
+
+  if (el.destino) {
+    try {
+      const salvo = localStorage.getItem(DESTINO_KEY);
+      if (salvo && [...el.destino.options].some((o) => o.value === salvo)) el.destino.value = salvo;
+    } catch { /* ignore */ }
+    el.destino.addEventListener('change', () => {
+      try { localStorage.setItem(DESTINO_KEY, el.destino.value); } catch { /* ignore */ }
+      atualizarDestino();
+    });
+  }
+
   function atualizarAcoes() {
     const total = state.marcados.size;
     el.top.disabled = state.gerando || !state.furos.length;
     el.gerar.disabled = state.gerando || !total;
+    const verbo = vaiPublicar() ? 'Gerar e publicar' : 'Gerar';
     el.gerar.textContent = state.gerando
       ? 'Gerando…'
       : total
-        ? `Gerar ${total} matéria${total > 1 ? 's' : ''}`
-        : 'Gerar matérias';
+        ? `${verbo} ${total} matéria${total > 1 ? 's' : ''}`
+        : `${verbo} matérias`;
   }
 
   function renderResultado(card, indice) {
@@ -242,6 +298,17 @@
     card.dataset.estado = r?.estado || '';
     if (!r) return;
     if (r.estado === 'fila') alvo.textContent = 'Na fila';
+    if (r.estado === 'auto') {
+      alvo.textContent = r.texto || 'Na fila de publicação';
+      if (r.matterId) {
+        const link = document.createElement('a');
+        link.href = `/materias-ia/${r.matterId}`;
+        link.target = '_blank';
+        link.rel = 'noopener';
+        link.textContent = ' — abrir matéria';
+        alvo.appendChild(link);
+      }
+    }
     if (r.estado === 'gerando') alvo.textContent = r.etapa || 'Escrevendo a matéria…';
     if (r.estado === 'erro') alvo.textContent = r.erro;
     if (r.estado === 'ok') {
@@ -265,7 +332,7 @@
       check.type = 'checkbox';
       check.className = 'mia-furo-check';
       check.checked = state.marcados.has(indice);
-      check.disabled = state.gerando || state.resultados.get(indice)?.estado === 'ok';
+      check.disabled = state.gerando || ['ok', 'auto'].includes(state.resultados.get(indice)?.estado);
       check.setAttribute('aria-label', `Gerar matéria: ${furo.titulo}`);
       check.addEventListener('change', () => {
         if (check.checked && state.marcados.size >= MAX_LOTE) {
@@ -429,9 +496,100 @@
     throw new Error('A matéria ainda está sendo escrita. Confira em Matérias salvas daqui a pouco.');
   }
 
+  const ETAPA_FILA = {
+    na_fila: 'Na fila de publicação',
+    escrevendo: 'Escrevendo a matéria…',
+    aguardando_imagem: 'Esperando a vez da imagem com IA…',
+    gerando_imagem: 'Gerando a imagem com IA…',
+    pronta: 'Pronta — sai no próximo horário',
+    publicando: 'Publicando…',
+  };
+
+  function hora(valor) {
+    const d = new Date(valor);
+    return Number.isNaN(d.getTime()) ? '' : d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  }
+
+  /** Atualiza os cartões enviados para a fila com o andamento no servidor. */
+  async function acompanharFila() {
+    clearTimeout(timerFila);
+    const acompanhados = [...state.resultados.entries()].filter(([, r]) => r.estado === 'auto' && r.itemId && !r.fim);
+    if (!acompanhados.length || dialog.hidden) return;
+    try {
+      const status = await api(API_FILA);
+      const porId = new Map((status.itens || []).concat(status.foraDaFila || []).map((i) => [Number(i.id), i]));
+      for (const [indice, r] of acompanhados) {
+        const item = porId.get(Number(r.itemId));
+        if (!item) continue;
+        let texto = ETAPA_FILA[item.status];
+        let fim = false;
+        if (item.status === 'publicada') {
+          texto = `Publicada às ${hora(item.publicado_at)}`;
+          fim = true;
+        } else if (item.status === 'erro' || item.status === 'descartada') {
+          texto = `Não publicada: ${item.erro || item.motivo || 'falhou'}`;
+          fim = true;
+        }
+        state.resultados.set(indice, { ...r, texto: texto || r.texto, matterId: item.matter_id || r.matterId, fim });
+        atualizarCard(indice);
+      }
+    } catch {
+      // tenta de novo na próxima volta
+    }
+    timerFila = setTimeout(acompanharFila, 10_000);
+  }
+
+  async function publicarEmFila(fila) {
+    state.gerando = true;
+    atualizarAcoes();
+    setStatus('Colocando as matérias na fila de publicação…');
+    try {
+      const data = await api(`${API_FILA}/fila`, {
+        method: 'POST',
+        body: JSON.stringify({
+          pautas: fila.map((i) => state.furos[i]),
+          intervalo_minutos: Number(el.destino.value) || 10,
+          facebook_page_id: el.pagina?.value || null,
+          modelo: modeloEscolhido(),
+          foto_original_se_falhar: true,
+        }),
+      });
+      const porUrl = new Map((data.adicionadas || []).map((a) => [a.url, a]));
+      const ignoradas = new Map((data.ignoradas || []).map((a) => [a.titulo, a.motivo]));
+      for (const i of fila) {
+        const furo = state.furos[i];
+        const adicionada = porUrl.get(furo.url);
+        if (adicionada) state.resultados.set(i, { estado: 'auto', itemId: adicionada.id, texto: ETAPA_FILA.na_fila });
+        else state.resultados.set(i, { estado: 'erro', erro: `Não entrou na fila: ${ignoradas.get(furo.titulo) || 'pauta inválida'}` });
+      }
+      const n = (data.adicionadas || []).length;
+      const pagina = el.pagina?.selectedOptions?.[0]?.textContent || 'página padrão';
+      setStatus(
+        n
+          ? `${n} matéria${n > 1 ? 's' : ''} na fila: uma a cada ${Number(el.destino.value)} min em ${pagina}, cada uma com imagem com IA. Roda no servidor — acompanhe em Piloto automático.`
+          : 'Nenhuma pauta entrou na fila.',
+        n ? 'ok' : 'erro'
+      );
+      acompanharFila();
+    } catch (err) {
+      setStatus(err.message, 'erro');
+    } finally {
+      state.gerando = false;
+      state.marcados.clear();
+      renderFuros();
+      atualizarAcoes();
+    }
+  }
+
   el.gerar.addEventListener('click', async () => {
     const fila = [...state.marcados].sort((a, b) => a - b);
     if (!fila.length || state.gerando) return;
+    if (vaiPublicar()) {
+      const pagina = el.pagina?.selectedOptions?.[0]?.textContent || 'página padrão';
+      if (!confirm(`Gerar e PUBLICAR ${fila.length} matéria(s) em ${pagina}?\n\nCada uma ganha imagem com IA e é publicada uma a cada ${Number(el.destino.value)} min.`)) return;
+      await publicarEmFila(fila);
+      return;
+    }
     state.gerando = true;
     state.parar = false;
     fila.forEach((i) => state.resultados.set(i, { estado: 'fila' }));

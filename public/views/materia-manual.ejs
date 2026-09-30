@@ -1,6 +1,6 @@
 <%- include('partials/app-start') %>
   <link rel="stylesheet" href="/css/materia-chat.css?v=20260902tomTitulosClaude1" />
-  <link rel="stylesheet" href="/css/materia-manual.css?v=20260929auto5" />
+  <link rel="stylesheet" href="/css/materia-manual.css?v=20260930fila1" />
   <link rel="stylesheet" href="/css/feed-sugerido.css?v=20260927feed4" />
 
   <main class="mia-chat mia-manual-claude" data-recolher-menu>
@@ -464,7 +464,25 @@
           <div id="furos-lista" class="mia-furos-lista"></div>
 
           <footer class="mia-furos-foot">
-            <p class="mia-furos-aviso">Cada matéria é reescrita com texto e título próprios, cruza a apuração e leva o crédito da fonte e da foto. Revise antes de publicar.</p>
+            <div class="mia-furos-publicar">
+              <label>
+                <span>Depois de gerar</span>
+                <select id="furos-destino" title="O que fazer com as matérias marcadas">
+                  <option value="5">Publicar 1 a cada 5 min</option>
+                  <option value="10" selected>Publicar 1 a cada 10 min</option>
+                  <option value="15">Publicar 1 a cada 15 min</option>
+                  <option value="20">Publicar 1 a cada 20 min</option>
+                  <option value="30">Publicar 1 a cada 30 min</option>
+                  <option value="60">Publicar 1 por hora</option>
+                  <option value="rascunho">Só salvar como rascunho</option>
+                </select>
+              </label>
+              <label id="furos-pagina-campo">
+                <span>Página</span>
+                <select id="furos-pagina"><option value="">Página padrão</option></select>
+              </label>
+              <p id="furos-destino-ajuda" class="mia-furos-aviso">Cada matéria é escrita, ganha imagem com IA e entra na fila de publicação. Roda no servidor: pode fechar a página.</p>
+            </div>
             <div class="mia-furos-acoes">
               <button type="button" id="furos-top" class="mia-furos-sec" disabled>Marcar os 5 mais quentes</button>
               <button type="button" id="furos-gerar" class="mia-furos-gerar" disabled>Gerar matérias</button>
@@ -678,7 +696,7 @@
   </script>
   <script src="/js/materia-chat.js?v=20260928feedModelo1"></script>
   <script src="/js/materia-chat-extras.js?v=20260915radarAmpliado1"></script>
-  <script src="/js/materia-furos.js?v=20260929furos4"></script>
-  <script src="/js/materia-furos-auto.js?v=20260929auto5"></script>
+  <script src="/js/materia-furos.js?v=20260930fila1"></script>
+  <script src="/js/materia-furos-auto.js?v=20260930fila1"></script>
   <script src="/js/feed-sugerido.js?v=20260928feedModelo1"></script>
 <%- include('partials/app-end') %>

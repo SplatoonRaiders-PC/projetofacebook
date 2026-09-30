@@ -26,6 +26,8 @@ const MAX_IMAGENS = 2;
 /** Matérias escritas à frente da publicação (escritas + em imagem + prontas). */
 const BUFFER_ALVO = 3;
 const MAX_FILA = 10;
+/** Com isso esperando na fila, a varredura seguinte é pulada. */
+const FILA_SUFICIENTE = 4;
 /** Aprovação normal: potencial da IA OU nota combinada (Furos + IA). */
 const NOTA_MINIMA_IA = 30;
 const NOTA_COMBINADA_MINIMA = 40;
@@ -100,6 +102,25 @@ function chaveDaPauta(pauta) {
 
 async function atualizarItem(id, dados) {
   await db(ITENS).where({ id }).update({ ...dados, updated_at: db.fn.now() });
+}
+
+/**
+ * Atualiza só se o item ainda estiver no status esperado. Se o editor
+ * cancelou a fila no meio da escrita/imagem, o resultado não o "ressuscita".
+ */
+async function atualizarSeAinda(id, statusAtual, dados) {
+  return db(ITENS).where({ id, status: statusAtual }).update({ ...dados, updated_at: db.fn.now() });
+}
+
+/** Escolhidas pelo editor passam na frente; depois, pela nota. */
+const ORDEM_FILA = "CASE WHEN origem = 'manual' THEN 0 ELSE 1 END, COALESCE(nota_ia, score) DESC, id ASC";
+
+/**
+ * Com o Automatizar desligado (pausado), só anda o que o editor escolheu no
+ * Furos do dia; as escolhidas pela IA esperam ele retomar.
+ */
+function soQuandoPermitido(query, row) {
+  return row.ativo ? query : query.where({ origem: 'manual' });
 }
 
 async function atualizarConfig(userId, dados) {
@@ -179,48 +200,64 @@ async function salvarConfig(userId, entrada = {}) {
   return statusPainel(userId);
 }
 
+/** Painel: só olha os últimos dias (a tabela cresce a cada varredura). */
+const JANELA_PAINEL_MS = 3 * 24 * 3_600_000;
+
 async function statusPainel(userId) {
-  const row = await db(CONFIG).where({ user_id: userId }).first();
-  const config = formatarConfig(row);
-  let contagens = {};
-  let itens = [];
-  let publicadasHoje = 0;
-  let foraDaFila = [];
-  try {
-    const linhas = await db(ITENS)
+  const inicio = Date.now();
+  const recente = new Date(Date.now() - JANELA_PAINEL_MS);
+  const tabelaAusente = (err) => {
+    if (/doesn't exist|no such table/i.test(String(err.message))) return null;
+    throw err;
+  };
+
+  // Tudo em paralelo: antes eram 6 consultas uma depois da outra.
+  const [row, linhas, hoje, itens, foraDaFila, manual] = await Promise.all([
+    db(CONFIG).where({ user_id: userId }).first(),
+    db(ITENS)
       .where({ user_id: userId })
       .whereIn('status', ['na_fila', ...EM_ANDAMENTO, 'publicando'])
       .groupBy('status')
       .select('status')
-      .count({ n: '*' });
-    contagens = Object.fromEntries(linhas.map((l) => [l.status, Number(l.n)]));
-    const hoje = await db(ITENS)
+      .count({ n: '*' })
+      .catch(tabelaAusente),
+    db(ITENS)
       .where({ user_id: userId, status: 'publicada' })
       .where('publicado_at', '>=', inicioDoDia())
       .count({ n: '*' })
-      .first();
-    publicadasHoje = Number(hoje?.n) || 0;
-    itens = await db(`${ITENS} as i`)
+      .first()
+      .catch(tabelaAusente),
+    db(`${ITENS} as i`)
       .leftJoin('ai_matters as m', 'm.id', 'i.matter_id')
       .where('i.user_id', userId)
-      .whereNot('i.status', 'descartada')
+      .whereIn('i.status', ['na_fila', ...EM_ANDAMENTO, 'publicando', 'publicada', 'erro'])
+      .where('i.updated_at', '>=', recente)
       .orderBy('i.updated_at', 'desc')
       .limit(30)
       .select(
-        'i.id', 'i.canal', 'i.titulo', 'i.url', 'i.status', 'i.nota_ia', 'i.score', 'i.motivo',
+        'i.id', 'i.origem', 'i.canal', 'i.titulo', 'i.url', 'i.status', 'i.nota_ia', 'i.score', 'i.motivo',
         'i.erro', 'i.matter_id', 'i.imagem_ia', 'i.publicado_at', 'i.updated_at',
-        'm.titulo as materia_titulo', 'm.imagem_url as materia_imagem'
-      );
+        'm.titulo as materia_titulo'
+      )
+      .catch(tabelaAusente),
     // O que a IA deixou de fora nas últimas 24h, com a nota e o motivo.
-    foraDaFila = await db(ITENS)
+    db(ITENS)
       .where({ user_id: userId, status: 'descartada' })
       .where('updated_at', '>=', new Date(Date.now() - 24 * 3_600_000))
       .orderBy('updated_at', 'desc')
       .limit(15)
-      .select('id', 'canal', 'titulo', 'url', 'nota_ia', 'motivo', 'erro', 'updated_at');
-  } catch (err) {
-    if (!/doesn't exist|no such table/i.test(String(err.message))) throw err;
-  }
+      .select('id', 'canal', 'titulo', 'url', 'nota_ia', 'motivo', 'erro', 'updated_at')
+      .catch(tabelaAusente),
+    // Escolhidas pelo editor ainda a caminho (andam mesmo com o piloto pausado).
+    db(ITENS)
+      .where({ user_id: userId, origem: 'manual' })
+      .whereIn('status', ['na_fila', ...EM_ANDAMENTO, 'publicando'])
+      .count({ n: '*' })
+      .first()
+      .catch(tabelaAusente),
+  ]);
+
+  const config = formatarConfig(row);
   let modeloNome = 'redator padrão do sistema';
   try {
     const modeloEfetivo = await modeloDoPiloto(row || {});
@@ -228,17 +265,21 @@ async function statusPainel(userId) {
   } catch {
     // mantém o rótulo padrão
   }
+  const ms = Date.now() - inicio;
+  if (ms > 1000) console.warn(`[furos-auto] painel do user ${userId} levou ${ms} ms`);
+
   const proximoScan = config.ultimo_scan_at ? new Date(new Date(config.ultimo_scan_at).getTime() + SCAN_MS) : null;
   return {
     config,
-    contagens,
-    publicadasHoje,
+    contagens: Object.fromEntries((linhas || []).map((l) => [l.status, Number(l.n)])),
+    publicadasHoje: Number(hoje?.n) || 0,
     proximoScan,
     escaneandoAgora: escaneando.has(Number(userId)),
     maxImagens: MAX_IMAGENS,
+    filaManual: Number(manual?.n) || 0,
     modeloNome,
-    itens,
-    foraDaFila,
+    itens: itens || [],
+    foraDaFila: foraDaFila || [],
   };
 }
 
@@ -286,6 +327,100 @@ async function salvarModelo(userId, modelo) {
     final = await require('./materiaModelosService').resolverModelo(final, { estrito: true });
   }
   await atualizarConfig(userId, { modelo: final });
+  return statusPainel(userId);
+}
+
+const MAX_ESCOLHIDAS = 20;
+
+/**
+ * Pautas marcadas no Furos do dia: entram na fila para escrever, gerar a
+ * imagem com IA e publicar uma a cada `intervalo_minutos`, mesmo com o
+ * Automatizar desligado.
+ */
+async function enfileirarEscolhidas(userId, entrada = {}) {
+  const pautas = (Array.isArray(entrada.pautas) ? entrada.pautas : [])
+    .filter((p) => p && /^https?:\/\//i.test(String(p.url || '')) && p.titulo)
+    .slice(0, MAX_ESCOLHIDAS);
+  if (!pautas.length) throw erro(400, 'Marque pelo menos uma pauta.');
+  const intervalo = Number(entrada.intervalo_minutos);
+  if (!INTERVALOS.includes(intervalo)) throw erro(400, `Escolha um intervalo de ${INTERVALOS.join(', ')} minutos.`);
+
+  const { resolvePageForUser, defaultPageForUser } = require('./facebookPageResolver');
+  const page = entrada.facebook_page_id
+    ? await resolvePageForUser(userId, entrada.facebook_page_id)
+    : await defaultPageForUser(userId);
+  if (!page) throw erro(400, 'Escolha a página do Facebook onde as matérias vão ser publicadas (ou defina uma padrão em /paginas).');
+
+  let modelo = corta(entrada.modelo, 120);
+  if (modelo && require('./deepseekService').usarTokenFree('conversa')) {
+    modelo = await require('./materiaModelosService').resolverModelo(modelo, { estrito: true });
+  }
+
+  const atual = await db(CONFIG).where({ user_id: userId }).first();
+  const proxima = atual?.proxima_postagem_at ? new Date(atual.proxima_postagem_at) : null;
+  const dados = {
+    intervalo_minutos: intervalo,
+    facebook_page_id: page.id,
+    ...(modelo ? { modelo } : {}),
+    foto_original_se_falhar: entrada.foto_original_se_falhar !== false,
+    // A primeira sai assim que ficar pronta (sem esperar um intervalo inteiro).
+    proxima_postagem_at: proxima && proxima > new Date() ? proxima : new Date(),
+  };
+  if (atual) await atualizarConfig(userId, dados);
+  else await db(CONFIG).insert({ user_id: userId, ativo: false, ...dados });
+
+  const adicionadas = [];
+  const ignoradas = [];
+  for (const pauta of pautas) {
+    const chave = chaveDaPauta(pauta);
+    const existente = await db(ITENS).where({ user_id: userId, chave }).first();
+    if (existente?.status === 'publicada') {
+      ignoradas.push({ titulo: pauta.titulo, motivo: 'já foi publicada pelo piloto' });
+      continue;
+    }
+    if (existente && ['na_fila', ...EM_ANDAMENTO, 'publicando'].includes(existente.status)) {
+      await atualizarItem(existente.id, { origem: 'manual' });
+      adicionadas.push({ id: existente.id, url: pauta.url, titulo: pauta.titulo });
+      continue;
+    }
+    if (existente) {
+      // Recusada pela IA ou que falhou antes: volta, agora escolhida pelo editor.
+      await atualizarItem(existente.id, {
+        origem: 'manual',
+        status: existente.matter_id && existente.status === 'erro' ? 'aguardando_imagem' : 'na_fila',
+        erro: null,
+        tentativas: 0,
+        motivo: 'Escolhida por você no Furos do dia',
+      });
+      adicionadas.push({ id: existente.id, url: pauta.url, titulo: pauta.titulo });
+      continue;
+    }
+    await db(ITENS).insert({
+      user_id: userId,
+      chave,
+      origem: 'manual',
+      canal: String(pauta.canal || 'noticias').slice(0, 16),
+      titulo: corta(pauta.titulo, 500),
+      url: String(pauta.url).slice(0, 1000),
+      pauta: JSON.stringify(pauta),
+      score: Math.max(0, Math.round(Number(pauta.score) || 0)),
+      nota_ia: null,
+      motivo: 'Escolhida por você no Furos do dia',
+      status: 'na_fila',
+    });
+    const novo = await db(ITENS).where({ user_id: userId, chave }).first('id');
+    adicionadas.push({ id: novo?.id || null, url: pauta.url, titulo: pauta.titulo });
+  }
+  setImmediate(() => void tick());
+  return { adicionadas, ignoradas, status: await statusPainel(userId) };
+}
+
+/** Tira da fila tudo o que o editor escolheu e ainda não saiu. */
+async function cancelarFilaManual(userId) {
+  await db(ITENS)
+    .where({ user_id: userId, origem: 'manual' })
+    .whereIn('status', ['na_fila', ...EM_ANDAMENTO])
+    .update({ status: 'descartada', erro: 'Fila cancelada pelo editor.', updated_at: db.fn.now() });
   return statusPainel(userId);
 }
 
@@ -381,8 +516,13 @@ async function escanear(row, { forcar = false } = {}) {
   try {
     await atualizarConfig(userId, { ultimo_scan_at: new Date() });
     const naFila = await db(ITENS).where({ user_id: userId, status: 'na_fila' }).count({ n: '*' }).first();
-    const vagas = MAX_FILA - (Number(naFila?.n) || 0);
-    if (vagas <= 0 && !forcar) return;
+    const esperando = Number(naFila?.n) || 0;
+    const vagas = MAX_FILA - esperando;
+    // Com pautas suficientes esperando, não gasta o servidor varrendo de novo.
+    if (!forcar && esperando >= FILA_SUFICIENTE) {
+      await registrarResumo(userId, `${esperando} pautas já esperando na fila; varredura adiada.`);
+      return;
+    }
 
     const config = formatarConfig(row);
     const resultado = await require('./furosService').buscarFuros({
@@ -391,6 +531,7 @@ async function escanear(row, { forcar = false } = {}) {
       horas: config.horas,
       limite: 40,
       canais: config.canais,
+      completar: false, // link real e foto só na pauta que for escrita
     });
 
     // Só o que nunca foi avaliado.
@@ -613,22 +754,21 @@ async function escreverPorApuracao(userId, pauta, pageId) {
 async function avancarEscrita(row) {
   const userId = Number(row.user_id);
   if (escrevendo.has(userId)) return;
-  const noCaminho = await db(ITENS)
-    .where({ user_id: userId })
+  const noCaminho = await soQuandoPermitido(db(ITENS).where({ user_id: userId }), row)
     .whereIn('status', EM_ANDAMENTO)
     .count({ n: '*' })
     .first();
   if ((Number(noCaminho?.n) || 0) >= BUFFER_ALVO) return;
 
-  const item = await db(ITENS)
-    .where({ user_id: userId, status: 'na_fila' })
-    .orderByRaw('COALESCE(nota_ia, score) DESC, id ASC')
+  const item = await soQuandoPermitido(db(ITENS).where({ user_id: userId, status: 'na_fila' }), row)
+    .orderByRaw(ORDEM_FILA)
     .first();
   if (!item) return;
 
   escrevendo.add(userId);
   try {
-    await atualizarItem(item.id, { status: 'escrevendo', erro: null });
+    const reservado = await atualizarSeAinda(item.id, 'na_fila', { status: 'escrevendo', erro: null });
+    if (!reservado) return;
     const matterId = await escreverMateria(item, row);
     if (!matterId) throw new Error('a matéria não foi salva');
     // Publicação automática é sempre foto (imagem obrigatória) na página do piloto.
@@ -636,11 +776,11 @@ async function avancarEscrita(row) {
       tipo_publicacao: 'foto',
       ...(row.facebook_page_id ? { facebook_page_id: row.facebook_page_id } : {}),
     });
-    await atualizarItem(item.id, { status: 'aguardando_imagem', matter_id: matterId });
+    await atualizarSeAinda(item.id, 'escrevendo', { status: 'aguardando_imagem', matter_id: matterId });
     setImmediate(() => void preencherImagens());
   } catch (err) {
     console.warn(`[furos-auto] escrever item ${item.id}:`, err.message);
-    await atualizarItem(item.id, { status: 'erro', erro: corta(`Escrita: ${err.message}`, 500) });
+    await atualizarSeAinda(item.id, 'escrevendo', { status: 'erro', erro: corta(`Escrita: ${err.message}`, 500) });
   } finally {
     escrevendo.delete(userId);
   }
@@ -658,24 +798,24 @@ async function gerarImagem(item, row) {
       thumbnail: pauta.imagem,
       permitirSimbolica: true,
     });
-    await atualizarItem(item.id, { status: 'pronta', imagem_ia: true, tentativas: tentativa, erro: null });
+    await atualizarSeAinda(item.id, 'gerando_imagem', { status: 'pronta', imagem_ia: true, tentativas: tentativa, erro: null });
   } catch (err) {
     console.warn(`[furos-auto] imagem item ${item.id} (tentativa ${tentativa}):`, err.message);
     if (tentativa < TENTATIVAS_IMAGEM) {
-      await atualizarItem(item.id, { status: 'aguardando_imagem', tentativas: tentativa, erro: corta(`Imagem: ${err.message}`, 500) });
+      await atualizarSeAinda(item.id, 'gerando_imagem', { status: 'aguardando_imagem', tentativas: tentativa, erro: corta(`Imagem: ${err.message}`, 500) });
       return;
     }
     const matter = await require('../models/AiMatters').findById(item.matter_id);
     const temArte = Boolean(matter?.imagem_path || matter?.imagem_url);
     if (row?.foto_original_se_falhar && temArte) {
-      await atualizarItem(item.id, {
+      await atualizarSeAinda(item.id, 'gerando_imagem', {
         status: 'pronta',
         imagem_ia: false,
         tentativas: tentativa,
         erro: corta(`Imagem da IA falhou (${err.message}); vai com a foto original.`, 500),
       });
     } else {
-      await atualizarItem(item.id, {
+      await atualizarSeAinda(item.id, 'gerando_imagem', {
         status: 'erro',
         tentativas: tentativa,
         erro: corta(`Sem imagem: ${err.message}. Não publicada.`, 500),
@@ -708,15 +848,20 @@ async function preencherImagens() {
   }
 }
 
+/** Usuários com o Automatizar ligado (atualizado a cada volta do tick). */
+let usuariosAtivos = new Set();
+
 async function ocuparVagasDeImagem() {
   while (imagensAtivas < MAX_IMAGENS) {
-    const item = await db(`${ITENS} as i`)
-      .join(`${CONFIG} as c`, 'c.user_id', 'i.user_id')
-      .where('c.ativo', true)
-      .where('i.status', 'aguardando_imagem')
-      .orderByRaw('COALESCE(i.nota_ia, i.score) DESC, i.id ASC')
-      .first('i.*', 'c.foto_original_se_falhar');
+    // Escolhidas pelo editor sempre andam; as da IA só com o Automatizar ligado.
+    const candidatos = await db(ITENS)
+      .where('status', 'aguardando_imagem')
+      .orderByRaw(ORDEM_FILA)
+      .limit(20);
+    const item = candidatos.find((i) => i.origem === 'manual' || usuariosAtivos.has(Number(i.user_id)));
     if (!item) return;
+    const cfg = await db(CONFIG).where({ user_id: item.user_id }).first();
+    item.foto_original_se_falhar = cfg ? cfg.foto_original_se_falhar : true;
     // Reserva atômica: outra volta do tick pode ter pego o mesmo item.
     const reservado = await db(ITENS)
       .where({ id: item.id, status: 'aguardando_imagem' })
@@ -810,9 +955,8 @@ async function tentarPublicar(row) {
     .first();
   if ((Number(hoje?.n) || 0) >= Number(row.limite_dia || 40)) return;
 
-  const item = await db(ITENS)
-    .where({ user_id: userId, status: 'pronta' })
-    .orderByRaw('COALESCE(nota_ia, score) DESC, id ASC')
+  const item = await soQuandoPermitido(db(ITENS).where({ user_id: userId, status: 'pronta' }), row)
+    .orderByRaw(ORDEM_FILA)
     .first();
   if (!item) return;
 
@@ -851,10 +995,24 @@ async function tentarPublicar(row) {
 
 // ---------------------------------------------------------------------- loop
 
+const DESCARTADA_ANTIGA_MS = 14 * 24 * 3_600_000;
+const ultimaLimpezaPesada = new Map();
+
 async function limparVelhas(userId) {
   const agora = Date.now();
+  // Recusadas antigas só serviam para não reavaliar o link; depois de 14 dias
+  // ele não volta mais na busca (12–48h). Apaga de hora em hora.
+  if (agora - (ultimaLimpezaPesada.get(userId) || 0) > 3_600_000) {
+    ultimaLimpezaPesada.set(userId, agora);
+    await db(ITENS)
+      .where({ user_id: userId, status: 'descartada' })
+      .where('updated_at', '<', new Date(agora - DESCARTADA_ANTIGA_MS))
+      .delete()
+      .catch((err) => console.warn('[furos-auto] limpeza:', err.message));
+  }
+  // Só as da IA "envelhecem" na fila; as escolhidas pelo editor esperam a vez.
   await db(ITENS)
-    .where({ user_id: userId, status: 'na_fila' })
+    .where({ user_id: userId, status: 'na_fila', origem: 'auto' })
     .where('created_at', '<', new Date(agora - FILA_VELHA_MS))
     .update({ status: 'descartada', erro: 'A pauta envelheceu na fila.', updated_at: db.fn.now() });
   await db(ITENS)
@@ -869,7 +1027,16 @@ async function tick() {
   try {
     let configs = [];
     try {
-      configs = await db(CONFIG).where({ ativo: true });
+      const ativos = await db(CONFIG).where({ ativo: true });
+      usuariosAtivos = new Set(ativos.map((r) => Number(r.user_id)));
+      // Quem tem pautas escolhidas no Furos do dia também anda, mesmo pausado.
+      const comFila = [...new Set((await db(ITENS)
+        .where({ origem: 'manual' })
+        .whereIn('status', ['na_fila', ...EM_ANDAMENTO])
+        .select('user_id')).map((r) => Number(r.user_id)))]
+        .filter((id) => !usuariosAtivos.has(id));
+      const pausados = comFila.length ? await db(CONFIG).whereIn('user_id', comFila) : [];
+      configs = [...ativos, ...pausados];
     } catch (err) {
       if (/doesn't exist|no such table/i.test(String(err.message))) return;
       throw err;
@@ -878,7 +1045,8 @@ async function tick() {
       try {
         await limparVelhas(row.user_id);
         const ultimo = row.ultimo_scan_at ? new Date(row.ultimo_scan_at).getTime() : 0;
-        if (Date.now() - ultimo >= SCAN_MS) void escanear(row);
+        // Varredura só com o Automatizar ligado.
+        if (row.ativo && Date.now() - ultimo >= SCAN_MS) void escanear(row);
         void avancarEscrita(row).catch((err) => console.warn('[furos-auto] escrita:', err.message));
         await tentarPublicar(row);
       } catch (err) {
@@ -929,6 +1097,8 @@ module.exports = {
   retomar,
   salvarModelo,
   escanearAgora,
+  enfileirarEscolhidas,
+  cancelarFilaManual,
   descartarItem,
   refazerItem,
   iniciar,

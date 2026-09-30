@@ -12,6 +12,7 @@
     pausar: $('piloto-pausar'),
     retomar: $('piloto-retomar'),
     varrer: $('piloto-varrer'),
+    cancelarFila: $('piloto-cancelar-fila'),
     aviso: $('piloto-aviso'),
     itens: $('piloto-itens'),
     vazio: $('piloto-vazio'),
@@ -106,7 +107,12 @@
     const { config, contagens = {}, publicadasHoje = 0 } = s;
     const ligado = config.ativo;
     el.luz.className = `inline-block h-3 w-3 rounded-full ${ligado ? 'bg-emerald-400 animate-pulse' : config.existe ? 'bg-amber-400' : 'bg-slate-500'}`;
-    el.titulo.textContent = ligado ? 'Ligado' : config.existe ? 'Pausado' : 'Ainda não configurado';
+    const filaManual = Number(s.filaManual) || 0;
+    el.titulo.textContent = ligado
+      ? 'Ligado'
+      : filaManual
+        ? 'Publicando a fila escolhida'
+        : config.existe ? 'Pausado' : 'Ainda não configurado';
     el.sub.textContent = ligado
       ? [
           `Publica a cada ${config.intervalo_minutos} min (até ${config.limite_dia} por dia)`,
@@ -116,12 +122,16 @@
             : 'publica a próxima assim que ficar pronta',
           s.escaneandoAgora ? 'procurando pautas agora…' : s.proximoScan ? `próxima varredura às ${quando(s.proximoScan)}` : 'varrendo em instantes',
         ].filter(Boolean).join(' · ')
-      : config.existe
+      : filaManual
+        ? `${filaManual} matéria(s) escolhida(s) por você no Furos do dia · publica 1 a cada ${config.intervalo_minutos} min${config.proxima_postagem_at && new Date(config.proxima_postagem_at) > new Date() ? ` · próxima às ${quando(config.proxima_postagem_at)}` : ''}. A varredura automática está pausada.`
+        : config.existe
         ? `Pausado${config.pausado_at ? ` desde ${quando(config.pausado_at, { comDia: true })}` : ''}. A fila e a configuração estão guardadas; nada é publicado até retomar.`
         : 'Ligue o “Automatizar” no Furos do dia para configurar nichos, fontes, intervalo e página.';
     el.pausar.hidden = !ligado;
     el.retomar.hidden = ligado || !config.existe;
     el.varrer.hidden = !ligado;
+    el.cancelarFila.hidden = !filaManual;
+    if (!ligado && filaManual) el.luz.className = 'inline-block h-3 w-3 rounded-full bg-sky-400 animate-pulse';
     el.varredura.classList.toggle('hidden', !config.ultimo_scan_resumo);
     el.varredura.textContent = config.ultimo_scan_resumo
       ? `Última varredura${config.ultimo_scan_at ? ` (${quando(config.ultimo_scan_at)})` : ''}: ${config.ultimo_scan_resumo}`
@@ -156,6 +166,7 @@
       meta.className = 'mt-0.5 truncate text-xs text-slate-400';
       meta.textContent = [
         CANAL[item.canal] || item.canal,
+        item.origem === 'manual' ? 'escolhida por você' : null,
         item.nota_ia != null ? `nota ${item.nota_ia}` : null,
         item.status === 'publicada' && item.publicado_at ? `publicada ${quando(item.publicado_at)}` : quando(item.updated_at),
         ['pronta', 'publicada'].includes(item.status) ? (item.imagem_ia ? 'imagem IA' : 'foto original') : null,
@@ -212,6 +223,8 @@
   el.retomar.addEventListener('click', () =>
     acao(`${API}/retomar`, el.retomar, 'Retomar o piloto?\n\nEle volta a procurar pautas e a PUBLICAR sozinho na página.'));
   el.varrer.addEventListener('click', () => acao(`${API}/escanear`, el.varrer));
+  el.cancelarFila.addEventListener('click', () =>
+    acao(`${API}/fila/cancelar`, el.cancelarFila, 'Cancelar a fila escolhida?\n\nAs matérias que ainda não foram publicadas saem da fila (as já publicadas continuam na página).'));
 
   atualizar();
   setInterval(() => {

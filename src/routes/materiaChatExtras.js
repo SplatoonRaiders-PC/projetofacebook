@@ -593,6 +593,19 @@ router.post('/furos/auto/pausar', (req, res, next) =>
 router.post('/furos/auto/retomar', (req, res, next) =>
   responderAuto(res, next, require('../services/furosAutopilotService').retomar(req.session.userId)));
 
+/** Pautas marcadas no Furos: escrever, gerar imagem e publicar no intervalo. */
+router.post('/furos/auto/fila', async (req, res, next) => {
+  try {
+    const r = await require('../services/furosAutopilotService').enfileirarEscolhidas(req.session.userId, req.body || {});
+    return res.json({ ok: true, adicionadas: r.adicionadas, ignoradas: r.ignoradas, ...r.status });
+  } catch (err) {
+    return err.status ? res.status(err.status).json({ error: err.message }) : next(err);
+  }
+});
+
+router.post('/furos/auto/fila/cancelar', (req, res, next) =>
+  responderAuto(res, next, require('../services/furosAutopilotService').cancelarFilaManual(req.session.userId)));
+
 router.post('/furos/auto/escanear', (req, res, next) =>
   responderAuto(res, next, require('../services/furosAutopilotService').escanearAgora(req.session.userId)));
 

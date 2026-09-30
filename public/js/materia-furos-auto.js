@@ -110,10 +110,13 @@
   function renderChip(status) {
     if (!el.chip) return;
     const { config } = status;
+    const filaManual = Number(status.filaManual) || 0;
     el.chip.hidden = !config.existe;
-    el.chip.classList.toggle('is-ligado', Boolean(config.ativo));
-    el.chip.classList.toggle('is-pausado', !config.ativo);
-    el.chip.textContent = config.ativo ? 'Piloto ligado' : 'Piloto pausado';
+    el.chip.classList.toggle('is-ligado', Boolean(config.ativo) || filaManual > 0);
+    el.chip.classList.toggle('is-pausado', !config.ativo && !filaManual);
+    el.chip.textContent = config.ativo
+      ? 'Piloto ligado'
+      : filaManual ? `Publicando fila (${filaManual})` : 'Piloto pausado';
     el.chip.title = config.ativo
       ? `Piloto automático ligado${status.modeloNome ? `, escrevendo com ${status.modeloNome}` : ''}: roda no servidor mesmo com o navegador fechado. Clique para acompanhar.`
       : 'Piloto automático pausado. Clique para acompanhar ou retomar.';

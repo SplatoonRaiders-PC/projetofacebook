@@ -56,6 +56,9 @@ test('painel envia fontes e quantidade e acompanha o vídeo até virar rascunho'
     // Desliga o Facebook e escolhe 40 pautas.
     doc.querySelector('[data-furos-canal="facebook"]').click();
     doc.getElementById('furos-limite').value = '40';
+    // Este teste cobre o modo "só rascunho" (sem publicar em fila).
+    doc.getElementById('furos-destino').value = 'rascunho';
+    doc.getElementById('furos-destino').dispatchEvent(new window.Event('change'));
     doc.getElementById('furos-buscar').click();
     await new Promise((r) => setTimeout(r, 20));
     const busca = pedidos.find((p) => p.url.endsWith('/furos/buscar')).corpo;

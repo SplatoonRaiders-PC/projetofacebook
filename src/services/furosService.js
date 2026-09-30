@@ -340,7 +340,12 @@ function pareceEspanhol(titulo) {
  * Busca e ordena. `nichos` vazio ou ['auto'] usa a escolha automática.
  * `canais`: 'noticias' (Google News), 'youtube', 'instagram', 'facebook'.
  */
-async function buscarFuros({ userId, nichos = [], horas = 24, limite = 12, canais = [] } = {}) {
+/**
+ * `completar: false` (piloto automático) pula a troca do link do Google News
+ * e a leitura da foto de cada pauta — dezenas de buscas em Python por
+ * varredura. O piloto faz isso só na pauta que for escrever.
+ */
+async function buscarFuros({ userId, nichos = [], horas = 24, limite = 12, canais = [], completar = true } = {}) {
   const automatico = !nichos.length || nichos.includes('auto');
   const ids = automatico ? await escolherNichosAutomaticos(userId) : nichosValidos(nichos);
   if (!ids.length) {
@@ -365,7 +370,7 @@ async function buscarFuros({ userId, nichos = [], horas = 24, limite = 12, canai
           { horas: janela, limite: Math.max(limite * 2, 30), userId, consultasPorTema: 6, apurar: false }
         )
       : vazio,
-    querNoticias
+    querNoticias && completar
       ? indiceDeLinksDiretos(selecionados.flatMap((n) => n.consultas.slice(0, 2)), janela).catch(() => [])
       : [],
     buscarFurosSociais({
@@ -425,9 +430,11 @@ async function buscarFuros({ userId, nichos = [], horas = 24, limite = 12, canai
 
   const redesEscolhidas = redesEmOrdem.slice(0, limite - escolhidos.length);
   const misturados = [...escolhidos, ...redesEscolhidas].sort((a, b) => b.score - a.score);
-  const furos = await emLotes(misturados, 8, (furo) =>
-    furo.canal === 'noticias' ? completarLinkEImagem(furo, indiceDireto) : furo
-  );
+  const furos = completar
+    ? await emLotes(misturados, 8, (furo) =>
+        furo.canal === 'noticias' ? completarLinkEImagem(furo, indiceDireto) : furo
+      )
+    : misturados;
 
   const porCanal = {};
   for (const furo of furos) porCanal[furo.canal] = (porCanal[furo.canal] || 0) + 1;
