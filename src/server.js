@@ -97,6 +97,8 @@ app.listen(env.port, async () => {
   }
   // Furos do dia no automático: varre, escreve, gera imagem e publica sozinho.
   require('./services/furosAutopilotService').iniciar();
+  // Fecha abas temporárias esquecidas no Chrome do gateway (CPU/memória).
+  require('./services/chromeFaxina').iniciar();
 
   // Não interrompe o site: se o gateway tiver voltado sem a sessão em memória,
   // reaproveita silenciosamente o login que já está salvo no Chrome privado.
