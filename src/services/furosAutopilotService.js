@@ -166,7 +166,7 @@ async function salvarConfig(userId, entrada = {}) {
   if (!INTERVALOS.includes(intervalo)) throw erro(400, `Escolha um intervalo de ${INTERVALOS.join(', ')} minutos.`);
   const limiteDia = Math.round(Number(entrada.limite_dia) || 40);
   if (limiteDia < 1 || limiteDia > 200) throw erro(400, 'O limite por dia deve ficar entre 1 e 200 publicações.');
-  const horas = [12, 24, 48].includes(Number(entrada.horas)) ? Number(entrada.horas) : 24;
+  const horas = furosService.JANELAS_HORAS.includes(Number(entrada.horas)) ? Number(entrada.horas) : 24;
 
   const { resolvePageForUser, defaultPageForUser } = require('./facebookPageResolver');
   const page = entrada.facebook_page_id

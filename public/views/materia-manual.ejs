@@ -1,6 +1,6 @@
 <%- include('partials/app-start') %>
   <link rel="stylesheet" href="/css/materia-chat.css?v=20260902tomTitulosClaude1" />
-  <link rel="stylesheet" href="/css/materia-manual.css?v=20260930fila1" />
+  <link rel="stylesheet" href="/css/materia-manual.css?v=20260930select1" />
   <link rel="stylesheet" href="/css/feed-sugerido.css?v=20260927feed4" />
 
   <main class="mia-chat mia-manual-claude" data-recolher-menu>
@@ -390,6 +390,8 @@
             </div>
             <div class="mia-furos-linha">
               <div class="mia-chat-seg" role="group" aria-label="Período">
+                <button type="button" class="mia-chat-seg-btn" data-furos-horas="3" aria-pressed="false" title="Só o que saiu nas últimas 3 horas">Recente</button>
+                <button type="button" class="mia-chat-seg-btn" data-furos-horas="8" aria-pressed="false" title="Últimas 8 horas">8h</button>
                 <button type="button" class="mia-chat-seg-btn" data-furos-horas="12" aria-pressed="false">12h</button>
                 <button type="button" class="mia-chat-seg-btn is-active" data-furos-horas="24" aria-pressed="true">24h</button>
                 <button type="button" class="mia-chat-seg-btn" data-furos-horas="48" aria-pressed="false">48h</button>
@@ -696,7 +698,7 @@
   </script>
   <script src="/js/materia-chat.js?v=20260928feedModelo1"></script>
   <script src="/js/materia-chat-extras.js?v=20260915radarAmpliado1"></script>
-  <script src="/js/materia-furos.js?v=20260930portais1"></script>
+  <script src="/js/materia-furos.js?v=20260930janelas1"></script>
   <script src="/js/materia-furos-auto.js?v=20260930agenda1"></script>
   <script src="/js/feed-sugerido.js?v=20260928feedModelo1"></script>
 <%- include('partials/app-end') %>

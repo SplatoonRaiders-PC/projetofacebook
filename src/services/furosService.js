@@ -305,6 +305,9 @@ function listarNichos() {
 
 const CANAIS = ['noticias', 'youtube', 'instagram', 'facebook'];
 
+/** Períodos aceitos, em horas. 3h é o "Recente" da tela. */
+const JANELAS_HORAS = [3, 8, 12, 24, 48];
+
 function canaisValidos(canais) {
   const lista = [...new Set((Array.isArray(canais) ? canais : []).map(String).filter((c) => CANAIS.includes(c)))];
   return lista.length ? lista : [...CANAIS];
@@ -440,7 +443,7 @@ async function buscarFuros({ userId, nichos = [], horas = 24, limite = 12, canai
   const querNoticias = listaCanais.includes('noticias');
   const { radarPorTemas } = require('../routes/materiaChatExtras');
   const { buscarFurosSociais } = require('./furosSociais');
-  const janela = [12, 24, 48].includes(Number(horas)) ? Number(horas) : 24;
+  const janela = JANELAS_HORAS.includes(Number(horas)) ? Number(horas) : 24;
   const vazio = { topicos: [], totalAnalisado: 0, totalOcultado: 0 };
   const { buscarNosPortais } = require('./portaisNichoService');
   const [resultado, indiceDireto, sociais, portais] = await Promise.all([
@@ -458,7 +461,7 @@ async function buscarFuros({ userId, nichos = [], horas = 24, limite = 12, canai
     buscarFurosSociais({
       userId,
       canais: listaCanais.filter((c) => c !== 'noticias'),
-      consultas: selecionados.flatMap((n) => n.consultas.slice(0, 3).map((consulta) => ({ consulta, nicho: n.rotulo }))),
+      consultas: selecionados.flatMap((n) => n.consultas.slice(0, 5).map((consulta) => ({ consulta, nicho: n.rotulo }))),
       horas: janela,
       limite,
       pontuarBomba,
@@ -492,20 +495,24 @@ async function buscarFuros({ userId, nichos = [], horas = 24, limite = 12, canai
       };
     })
     .sort((a, b) => b.score - a.score);
-  const pontuados = mesclarPortais(doGoogle, portais.itens || [], selecionados, agora);
+  // O radar deixa passar sem data o que o Google marca "em alta"; aqui o
+  // período escolhido vale para tudo. Pauta sem data conhecida continua.
+  const dentroDaJanela = (item) => !item.dataTimestamp || agora - item.dataTimestamp <= janela * 3_600_000;
+  const pontuados = mesclarPortais(doGoogle, portais.itens || [], selecionados, agora).filter(dentroDaJanela);
 
   // Pauta que não cita o nicho é ruído do Google; só completa uma lista curta.
   const rotulos = selecionados.map((n) => n.rotulo);
   // Vídeo do YouTube que não cita o nicho no título costuma ser ruído da busca.
   const sociaisNoNicho = (sociais.itens || []).filter(
     (item) =>
-      item.canal !== 'youtube' ||
-      (!pareceEspanhol(item.titulo) && (!item.nicho || pertenceAoNicho(item, nichoPorRotulo.get(item.nicho))))
+      dentroDaJanela(item) &&
+      (item.canal !== 'youtube' ||
+        (!pareceEspanhol(item.titulo) && (!item.nicho || pertenceAoNicho(item, nichoPorRotulo.get(item.nicho)))))
   );
-  // Redes ficam com até 40% das vagas; as notícias repartem o resto entre
+  // Redes ficam com até metade das vagas; as notícias repartem o resto entre
   // os nichos. Se faltar notícia, as redes completam a lista.
   const redesEmOrdem = alternarRedes(sociaisNoNicho, rotulos);
-  const cotaRedes = querNoticias ? Math.min(redesEmOrdem.length, Math.ceil(limite * 0.4)) : Math.min(redesEmOrdem.length, limite);
+  const cotaRedes = querNoticias ? Math.min(redesEmOrdem.length, Math.ceil(limite * 0.5)) : Math.min(redesEmOrdem.length, limite);
 
   const doNicho = pontuados.filter((p) => p.noNicho);
   const foraDoNicho = pontuados.filter((p) => !p.noNicho);
@@ -701,6 +708,7 @@ function statusGeracao(userId, jobId) {
 module.exports = {
   NICHOS,
   CANAIS,
+  JANELAS_HORAS,
   ehPautaDeRede,
   iniciarGeracaoDeRede,
   statusGeracao,

@@ -130,9 +130,30 @@ function rodarBuscaYoutube(entrada, timeoutMs = 45_000) {
 /**
  * @param {{ consultas: Array<{ consulta: string, nicho: string }>, horas: number, limitePorConsulta?: number }} opts
  */
-async function buscarYoutube({ consultas, horas, limitePorConsulta = 6 }) {
+/**
+ * Mesma busca em 10 min (piloto a cada 5 min, editor clicando de novo)
+ * reaproveita o resultado em vez de consultar o YouTube outra vez.
+ */
+const CACHE_YOUTUBE_MS = 10 * 60 * 1000;
+const cacheYoutube = new Map();
+
+function buscaYoutubeComCache(entrada) {
+  const chave = JSON.stringify([[...entrada.consultas].sort(), entrada.periodo, entrada.limite]);
+  const guardado = cacheYoutube.get(chave);
+  if (guardado && guardado.expiraEm > Date.now()) return guardado.promessa;
+  const promessa = rodarBuscaYoutube(entrada).then((resultado) => {
+    // Falha não fica guardada: a próxima busca tenta de novo.
+    if (resultado.erro && !(resultado.itens || []).length) cacheYoutube.delete(chave);
+    return resultado;
+  });
+  cacheYoutube.set(chave, { promessa, expiraEm: Date.now() + CACHE_YOUTUBE_MS });
+  for (const [k, v] of cacheYoutube) if (v.expiraEm <= Date.now()) cacheYoutube.delete(k);
+  return promessa;
+}
+
+async function buscarYoutube({ consultas, horas, limitePorConsulta = 10 }) {
   const nichoDaConsulta = new Map(consultas.map((c) => [c.consulta, c.nicho]));
-  const resultado = await rodarBuscaYoutube({
+  const resultado = await buscaYoutubeComCache({
     consultas: consultas.map((c) => c.consulta),
     periodo: horas <= 24 ? 'hoje' : 'semana',
     limite: limitePorConsulta,

@@ -18,6 +18,13 @@
   color: var(--mia-chat-text);
 }
 .mia-manual-claude [hidden] { display: none !important; }
+/* Menu nativo dos <select>: sem isto o navegador abre a lista com fundo
+   branco e as opções herdam o texto claro, ficando ilegíveis. */
+.mia-manual-claude select { color-scheme: dark; }
+.mia-manual-claude select option,
+.mia-manual-claude select optgroup { background-color: #16191e; color: #e9ebef; }
+.mia-manual-claude select option:checked { background-color: #1f3a2f; color: #d1fae5; }
+.mia-manual-claude select option:disabled { color: #5f6672; }
 .mia-manual-claude :is(button, summary, input, textarea, select, a):focus-visible { outline: 2px solid var(--mia-chat-accent); outline-offset: 2px; }
 
 /* Menu global nesta tela: mesmo fundo do chat, sem costura visível. */
