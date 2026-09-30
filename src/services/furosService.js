@@ -718,5 +718,6 @@ module.exports = {
   buscarFuros,
   gerarFuro,
   linkDiretoPeloTitulo,
+  completarLinkEImagem,
   mesclarPortais,
 };

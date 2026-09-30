@@ -343,9 +343,30 @@ def search(
     return output, errors
 
 
+def decode_many(urls: list) -> list[dict]:
+    """Modo "decode": links do Google News -> endereço real da matéria."""
+    links = [str(u) for u in urls if isinstance(u, str) and "news.google.com" in u][:12]
+
+    def decode(link: str) -> dict:
+        try:
+            final_url = decode_google_news_url(link)
+        except Exception:
+            final_url = ""
+        ok = final_url and "news.google.com" not in final_url
+        return {"link": link, "final": final_url if ok else ""}
+
+    if not links:
+        return []
+    with ThreadPoolExecutor(max_workers=min(4, len(links))) as executor:
+        return list(executor.map(decode, links))
+
+
 def main() -> int:
     try:
         payload = json.loads(sys.stdin.read() or "{}")
+        if isinstance(payload.get("decode"), list):
+            print(json.dumps({"ok": True, "items": decode_many(payload["decode"])}, ensure_ascii=False))
+            return 0
         query = clean_text(payload.get("query"))[:180]
         days = max(1, min(int(payload.get("days") or 30), 365))
         limit = max(1, min(int(payload.get("limit") or 20), 40))

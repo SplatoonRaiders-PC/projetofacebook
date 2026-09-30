@@ -233,6 +233,21 @@ function limpar(valor, max) {
     .slice(0, max);
 }
 
+/**
+ * O resumo do Google News é o próprio título seguido de "&nbsp;&nbsp;Veículo".
+ * Nesse caso não acrescenta nada ao cartão e vira texto vazio.
+ */
+function resumoUtil(t) {
+  const semEntidade = String(t.resumo || t.trecho || '').replace(/&nbsp;| /gi, ' ');
+  const resumo = limpar(semEntidade, 320);
+  const titulo = limpar(t.titulo, 300);
+  const veiculo = limpar(t.veiculo || t.fonte, 120);
+  let resto = resumo;
+  if (titulo && resto.toLowerCase().startsWith(titulo.toLowerCase())) resto = resto.slice(titulo.length).trim();
+  if (!resto || (veiculo && resto.toLowerCase() === veiculo.toLowerCase())) return '';
+  return resumo;
+}
+
 async function comPrazo(promessa, ms, fallback) {
   let timer = null;
   try {
@@ -324,7 +339,9 @@ router.post('/em-alta', async (req, res, next) => {
         titulo: limpar(t.titulo, 300),
         url: String(t.link || t.url).trim().slice(0, 500),
         veiculo: limpar(t.veiculo || t.fonte || 'Web', 80),
-        resumo: limpar(t.resumo || t.trecho, 320),
+        resumo: resumoUtil(t),
+        imagem: /^https?:\/\//i.test(String(t.imagemFonte || t.imagem || '')) ? String(t.imagemFonte || t.imagem) : null,
+        dataTimestamp: Number(t.dataTimestamp) || null,
         tema: limpar(t.tema, 60) || null,
         contagemFontes: Number(t.contagemFontes) || 1,
         calor: Number(t.calor) || 0,
@@ -510,6 +527,98 @@ router.post('/anexos-imagem', (req, res, next) => {
       });
     }
   });
+});
+
+/* —— Imagens das pautas do radar —— */
+
+const CACHE_IMAGEM_MS = 60 * 60 * 1000;
+const cacheImagens = new Map();
+
+/**
+ * O radar chega com link do Google News e sem foto. Em ordem de custo:
+ *   1. a mesma notícia nos portais (já em cache, custo zero);
+ *   2. o link do Google decodificado para o endereço real (um Python só
+ *      para o lote inteiro) e a og:image dessa página;
+ *   3. só para o que sobrar, a busca da matéria pelo título.
+ * Devolve também o link direto, que o rascunho e o agendamento passam a usar.
+ */
+async function imagensDasPautas(pautas, itensPortais) {
+  const nr = require('../services/newsResearch');
+  const { extrairMetadadosImagemArtigo } = require('../services/articleSource');
+  const { completarLinkEImagem } = require('../services/furosService');
+  const resultado = new Map();
+  const pendentes = [];
+
+  for (const pauta of pautas) {
+    const guardada = cacheImagens.get(pauta.url);
+    if (guardada && guardada.expiraEm > Date.now()) {
+      resultado.set(pauta.url, guardada.valor);
+      continue;
+    }
+    const doPortal = itensPortais.find((item) => item.imagem && nr.titulosSimilares(item.titulo, pauta.titulo));
+    if (doPortal) resultado.set(pauta.url, { url: doPortal.link, veiculo: doPortal.veiculo, imagem: doPortal.imagem });
+    else pendentes.push(pauta);
+  }
+
+  const decodificados = await comPrazo(
+    nr.decodificarLinksGoogle(pendentes.map((p) => p.url)),
+    25_000,
+    new Map()
+  );
+
+  // No máximo 3 páginas lidas ao mesmo tempo, para não pesar no servidor.
+  let proxima = 0;
+  await Promise.all(Array.from({ length: Math.min(3, pendentes.length) }, async () => {
+    while (proxima < pendentes.length) {
+      const pauta = pendentes[proxima];
+      proxima += 1;
+      const urlReal = decodificados.get(pauta.url) || (/news\.google\.com/i.test(pauta.url) ? null : pauta.url);
+      let valor = null;
+      if (urlReal) {
+        const meta = await comPrazo(extrairMetadadosImagemArtigo(urlReal), 9_000, null);
+        const imagem = /^https?:\/\//i.test(String(meta?.imagem || '')) ? String(meta.imagem) : null;
+        valor = { url: urlReal, veiculo: pauta.veiculo, imagem };
+      }
+      if (!valor?.imagem) {
+        const completo = await comPrazo(completarLinkEImagem({ ...pauta, imagem: null }, []), 20_000, null);
+        if (completo?.imagem) valor = { url: completo.url, veiculo: completo.veiculo, imagem: completo.imagem };
+      }
+      resultado.set(pauta.url, valor || { url: urlReal || pauta.url, veiculo: pauta.veiculo, imagem: null });
+    }
+  }));
+
+  for (const pauta of pendentes) {
+    cacheImagens.set(pauta.url, { valor: resultado.get(pauta.url), expiraEm: Date.now() + CACHE_IMAGEM_MS });
+  }
+  while (cacheImagens.size > 2000) cacheImagens.delete(cacheImagens.keys().next().value);
+  return resultado;
+}
+
+router.post('/radar/imagens', async (req, res, next) => {
+  try {
+    const pautas = (Array.isArray(req.body?.pautas) ? req.body.pautas : [])
+      .map((p) => ({
+        url: String(p?.url || '').trim().slice(0, 1000),
+        titulo: limpar(p?.titulo, 300),
+        veiculo: limpar(p?.veiculo, 120),
+      }))
+      .filter((p) => /^https?:\/\//i.test(p.url) && p.titulo)
+      .slice(0, 12);
+    if (!pautas.length) return res.json({ ok: true, imagens: [] });
+
+    const { buscarNosPortais } = require('../services/portaisNichoService');
+    const { NICHOS } = require('../services/furosService');
+    const portais = await buscarNosPortais({ nichos: NICHOS.map((n) => n.id), horas: 168 }).catch(() => ({ itens: [] }));
+
+    const achados = await imagensDasPautas(pautas, portais.itens || []);
+    const imagens = pautas.map((pauta) => ({
+      original: pauta.url,
+      ...(achados.get(pauta.url) || { url: pauta.url, imagem: null }),
+    }));
+    return res.json({ ok: true, imagens });
+  } catch (err) {
+    return next(err);
+  }
 });
 
 /* —— Furos do dia: notícias quentes por nicho → matérias em lote —— */

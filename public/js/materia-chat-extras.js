@@ -13,6 +13,10 @@
   const API = '/api/materias-ia/chat-extras';
   const MAX_PDF_NO_PEDIDO = 12000;
   const MAX_TOPICOS_LOTE = 8;
+  /** Limite da fila do servidor (furosAutopilotService.MAX_ESCOLHIDAS). */
+  const MAX_AGENDAR = 20;
+  const INTERVALOS_AGENDA = [5, 10, 15, 20, 30, 60];
+  const INTERVALO_KEY = 'ViralizeAI.radarIntervalo';
   /** Quantos esqueletos aparecem enquanto o radar carrega. */
   const ESQUELETOS = 6;
 
@@ -202,6 +206,28 @@
       flex: 0 0 4.5rem; width: 4.5rem; height: 4.5rem; border-radius: .55rem;
       object-fit: cover; background: #020617; border: 1px solid #1e293b;
     }
+    .mia-x-card-thumb.is-carregando {
+      background: linear-gradient(90deg, #0f172a, #1e293b, #0f172a);
+      background-size: 200% 100%; animation: mia-x-brilho 1.3s linear infinite;
+    }
+    .mia-x-card-thumb.is-sem-imagem { display: none; }
+    @keyframes mia-x-brilho { to { background-position: -200% 0; } }
+    .mia-x-card.is-agendada { border-color: rgba(52,211,153,.45); background: rgba(16,185,129,.06); }
+    .mia-x-agenda {
+      display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; margin: -.1rem 0 .6rem;
+      font-size: .72rem; color: #94a3b8;
+    }
+    .mia-x-agenda-select {
+      color-scheme: dark; background: #0b1220; color: #e2e8f0; border: 1px solid #334155;
+      border-radius: .45rem; padding: .3rem .45rem; font-size: .72rem;
+    }
+    .mia-x-agenda-select option { background: #0f172a; color: #e2e8f0; }
+    .mia-x-lote-agendar {
+      border: 0; border-radius: .45rem; padding: .35rem .8rem; cursor: pointer;
+      background: linear-gradient(135deg, #fdba74, #fb923c); color: #431407; font-size: .72rem; font-weight: 700;
+    }
+    .mia-x-lote-agendar:hover:not(:disabled) { filter: brightness(1.08); }
+    .mia-x-lote-agendar:disabled { opacity: .5; cursor: default; }
     .mia-x-card-tit { display: block; font-size: .8125rem; font-weight: 500; line-height: 1.35; color: #e2e8f0; }
     .mia-x-card-meta { display: block; margin-top: .2rem; font-size: .65rem; color: #64748b; }
     .mia-x-card-res { display: block; margin-top: .25rem; font-size: .7rem; line-height: 1.4; color: #94a3b8; }
@@ -508,6 +534,67 @@
 
   function pedirMateriaDoTopico(topico) {
     pedirMateriaDosTopicos([topico]);
+  }
+
+  let paginasFacebookPromise = null;
+
+  /** Preenche o seletor de página com as páginas da conta (padrão marcada). */
+  async function carregarPaginasFacebook(select) {
+    if (!paginasFacebookPromise) {
+      paginasFacebookPromise = apiJson('/api/facebook/pages').catch(() => null);
+    }
+    const data = await paginasFacebookPromise;
+    const paginas = Array.isArray(data?.pages) ? data.pages : [];
+    if (!paginas.length || !select.isConnected) return;
+    select.replaceChildren(...paginas.map((p) => {
+      const opcao = new Option(p.page_name || p.name || `Página ${p.id}`, String(p.id));
+      opcao.selected = Number(p.id) === Number(data.default_facebook_page_id);
+      return opcao;
+    }));
+  }
+
+  /**
+   * Completa as fotos das pautas que chegaram sem imagem, 6 por vez, para a
+   * lista aparecer na hora e as miniaturas irem surgindo. O link direto da
+   * matéria (no lugar do link do Google) passa a valer para salvar e agendar.
+   */
+  async function buscarImagensDoRadar(itens) {
+    // Chamada durante a montagem da lista: espera o bloco entrar na página,
+    // senão a checagem isConnected abaixo descartaria todos os cartões.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const pendentes = itens.filter((item) => !item.topico.imagem && item.topico.url);
+    for (let i = 0; i < pendentes.length; i += 6) {
+      const grupo = pendentes.slice(i, i + 6).filter((item) => item.card.isConnected);
+      if (!grupo.length) return;
+      let imagens = [];
+      try {
+        const data = await apiJson(`${API}/radar/imagens`, {
+          method: 'POST',
+          body: JSON.stringify({
+            pautas: grupo.map(({ topico }) => ({ url: topico.url, titulo: topico.titulo, veiculo: topico.veiculo })),
+          }),
+        });
+        imagens = data?.imagens || [];
+      } catch {
+        imagens = [];
+      }
+      grupo.forEach((item, indice) => {
+        const achado = imagens[indice];
+        if (achado?.url && achado.url !== item.topico.url) {
+          item.topico.url = achado.url;
+          if (achado.veiculo) item.topico.veiculo = achado.veiculo;
+          const fonte = item.card.querySelector('.mia-x-card-fonte');
+          if (fonte) fonte.href = achado.url;
+        }
+        if (achado?.imagem) {
+          item.topico.imagem = achado.imagem;
+          item.thumb.src = achado.imagem;
+          item.thumb.classList.remove('is-carregando');
+        } else {
+          item.thumb.classList.add('is-sem-imagem');
+        }
+      });
+    }
   }
 
   async function salvarTopicosComoRascunhos(topicos) {
@@ -899,7 +986,9 @@
     if (topicos.length) {
       const selecionados = new Map();
       const itens = [];
-      const limiteSelecao = paginaFacebook ? topicos.length : Math.min(MAX_TOPICOS_LOTE, topicos.length);
+      // Agendar aceita até MAX_AGENDAR; "Criar no chat" continua em
+      // MAX_TOPICOS_LOTE porque escreve todas numa resposta só.
+      const limiteSelecao = paginaFacebook ? topicos.length : Math.min(MAX_AGENDAR, topicos.length);
       const nomeFonte = (topico) => String(topico?.veiculo || topico?.fonteNome || 'Web').trim() || 'Web';
       const contagemPorFonte = new Map();
       const gruposFonte = new Map();
@@ -966,6 +1055,38 @@
       if (!paginaFacebook) lote.appendChild(gerar);
       box.appendChild(lote);
 
+      // Agendar: cada selecionada é escrita, ganha imagem com IA e publica
+      // sozinha, uma a cada N minutos (mesma fila do Furos do dia).
+      const agenda = document.createElement('div');
+      agenda.className = 'mia-x-agenda';
+      const rotuloAgenda = document.createElement('span');
+      rotuloAgenda.textContent = 'Agendar selecionadas:';
+      const intervalo = document.createElement('select');
+      intervalo.className = 'mia-x-agenda-select';
+      intervalo.setAttribute('aria-label', 'Intervalo entre as publicações');
+      let intervaloSalvo = 10;
+      try { intervaloSalvo = Number(localStorage.getItem(INTERVALO_KEY)) || 10; } catch { /* ignore */ }
+      INTERVALOS_AGENDA.forEach((min) => {
+        const opcao = new Option(min === 60 ? '1 por hora' : `1 a cada ${min} min`, String(min));
+        opcao.selected = min === intervaloSalvo;
+        intervalo.add(opcao);
+      });
+      intervalo.addEventListener('change', () => {
+        try { localStorage.setItem(INTERVALO_KEY, intervalo.value); } catch { /* ignore */ }
+      });
+      const pagina = document.createElement('select');
+      pagina.className = 'mia-x-agenda-select';
+      pagina.setAttribute('aria-label', 'Página onde publicar');
+      pagina.add(new Option('Página padrão', ''));
+      carregarPaginasFacebook(pagina);
+      const agendar = document.createElement('button');
+      agendar.type = 'button';
+      agendar.className = 'mia-x-lote-agendar';
+      agendar.textContent = 'Agendar';
+      agendar.disabled = true;
+      agenda.append(rotuloAgenda, intervalo, pagina, agendar);
+      if (podeSalvarRascunho) box.appendChild(agenda);
+
       const resultadoLote = document.createElement('p');
       resultadoLote.className = 'mia-x-base hidden';
       box.appendChild(resultadoLote);
@@ -1005,6 +1126,8 @@
         const totalVisivel = itensVisiveis().length;
         const limiteVisivel = paginaFacebook ? totalVisivel : Math.min(MAX_TOPICOS_LOTE, totalVisivel);
         const complementoFonte = maisLidas && fonteAtiva !== '*' ? ` de ${fonteAtiva}` : '';
+        agendar.disabled = total === 0 || salvando;
+        agendar.textContent = salvando ? 'Agendando...' : total ? `Agendar ${total}` : 'Agendar';
         salvar.disabled = total === 0 || salvando;
         salvar.textContent = salvando
           ? 'Criando rascunhos...'
@@ -1059,7 +1182,76 @@
           setStatus('Marque ao menos um assunto.');
           return;
         }
+        if (alvos.length > MAX_TOPICOS_LOTE) {
+          setStatus(`No chat cabem até ${MAX_TOPICOS_LOTE} matérias por vez. Para mais, use "Salvar rascunhos" ou "Agendar".`);
+          return;
+        }
         pedirMateriaDosTopicos(alvos);
+      });
+
+      agendar.addEventListener('click', async () => {
+        const alvos = [...selecionados.values()];
+        if (!alvos.length || salvando) return;
+        const nomePagina = pagina.selectedOptions[0]?.textContent || 'página padrão';
+        const minutos = Number(intervalo.value) || 10;
+        if (!confirm(`Agendar ${alvos.length} matéria(s) em ${nomePagina}?\n\nCada uma é escrita, ganha imagem com IA e é publicada sozinha, uma a cada ${minutos === 60 ? 'hora' : `${minutos} min`}.`)) return;
+        salvando = true;
+        atualizarLote();
+        setStatus(`Colocando ${alvos.length} matéria(s) na fila de publicação...`);
+        try {
+          const data = await apiJson(`${API}/furos/auto/fila`, {
+            method: 'POST',
+            body: JSON.stringify({
+              pautas: alvos.map((topico) => ({
+                titulo: topico.titulo,
+                url: topico.url,
+                veiculo: topico.veiculo || 'Web',
+                resumo: topico.resumo || '',
+                imagem: topico.imagem || null,
+                data: topico.data || null,
+                dataTimestamp: Number(topico.dataTimestamp) || null,
+                nicho: topico.tema || null,
+                canal: 'noticias',
+                score: Number(topico.calor) || 0,
+              })),
+              intervalo_minutos: minutos,
+              facebook_page_id: pagina.value || null,
+              foto_original_se_falhar: true,
+            }),
+          });
+          const entraram = (data.adicionadas || []).length;
+          const recusadas = data.ignoradas || [];
+          resultadoLote.classList.remove('hidden');
+          resultadoLote.textContent = entraram
+            ? `${entraram} matéria(s) na fila: cada uma é escrita, ganha imagem e publica uma a cada ${minutos === 60 ? 'hora' : `${minutos} min`} em ${nomePagina}. Pode fechar o navegador.${recusadas.length ? ` ${recusadas.length} não entrou(aram): ${recusadas.map((r) => r.motivo).join('; ')}.` : ''}`
+            : `Nenhuma entrou na fila: ${recusadas.map((r) => r.motivo).join('; ') || 'pautas inválidas'}.`;
+          const acompanhar = document.createElement('a');
+          acompanhar.href = '/piloto-automatico';
+          acompanhar.className = 'mia-chat-ghost-btn';
+          acompanhar.textContent = 'Acompanhar';
+          resultadoLote.append(' ', acompanhar);
+          setStatus(entraram ? `${entraram} matéria(s) agendada(s).` : 'Nenhuma matéria entrou na fila.');
+          if (entraram) {
+            const adicionadas = new Set((data.adicionadas || []).map((a) => a.url));
+            itens.forEach((item) => {
+              if (!adicionadas.has(item.topico.url)) return;
+              item.card.classList.add('is-agendada');
+              const botaoCard = item.card.querySelector('.mia-x-card-gerar');
+              if (botaoCard) {
+                botaoCard.disabled = true;
+                botaoCard.textContent = 'Na fila';
+              }
+            });
+            limparSelecaoAtual();
+          }
+        } catch (err) {
+          resultadoLote.classList.remove('hidden');
+          resultadoLote.textContent = err.message || 'Não foi possível agendar.';
+          setStatus(resultadoLote.textContent);
+        } finally {
+          salvando = false;
+          atualizarLote();
+        }
       });
 
       salvar.addEventListener('click', async () => {
@@ -1141,15 +1333,16 @@
         pos.textContent = String(maisLidas && t.posicao ? t.posicao : i + 1);
         card.appendChild(pos);
 
-        if (t.imagem) {
-          const thumb = document.createElement('img');
-          thumb.className = 'mia-x-card-thumb';
-          thumb.src = t.imagem;
-          thumb.alt = '';
-          thumb.loading = 'lazy';
-          thumb.referrerPolicy = 'no-referrer';
-          card.appendChild(thumb);
-        }
+        // Sem foto ainda: o quadro fica "carregando" até buscarImagensDoRadar
+        // achar a imagem da matéria (ou some, se não houver nenhuma).
+        const thumb = document.createElement('img');
+        thumb.className = `mia-x-card-thumb${t.imagem ? '' : ' is-carregando'}`;
+        thumb.alt = '';
+        thumb.loading = 'lazy';
+        thumb.referrerPolicy = 'no-referrer';
+        if (t.imagem) thumb.src = t.imagem;
+        thumb.addEventListener('error', () => thumb.classList.add('is-sem-imagem'));
+        card.appendChild(thumb);
 
         const txt = document.createElement('span');
         txt.className = 'mia-x-card-txt';
@@ -1243,7 +1436,7 @@
           check.dispatchEvent(new Event('change', { bubbles: true }));
         });
 
-        itens.push({ input: check, card, key, topico: t, fonte: fonteDoTopico });
+        itens.push({ input: check, card, key, topico: t, fonte: fonteDoTopico, thumb });
         const grupo = maisLidas ? gruposFonte.get(fonteDoTopico) : null;
         (grupo?._itens || lista).appendChild(card);
       });
@@ -1251,6 +1444,7 @@
       if (maisLidas) aplicarFiltroFonte('*');
       else atualizarLote();
       box.appendChild(lista);
+      buscarImagensDoRadar(itens);
     }
 
     wrap.appendChild(box);

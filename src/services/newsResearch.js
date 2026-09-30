@@ -348,6 +348,53 @@ function executarGooglePython(binario, payload) {
   });
 }
 
+const CACHE_DECODE_MS = 6 * 60 * 60 * 1000;
+const cacheDecode = new Map();
+
+/**
+ * Links do Google News → endereço real da matéria, num único processo Python
+ * para o lote inteiro. Devolve Map(link → url real); o que não resolver fica
+ * de fora. O link do Google não muda, então o resultado fica 6h em cache.
+ */
+async function decodificarLinksGoogle(urls) {
+  const resolvidos = new Map();
+  const pendentes = [];
+  for (const url of [...new Set((urls || []).map(String))]) {
+    if (!/news\.google\.com/i.test(url)) continue;
+    const guardado = cacheDecode.get(url);
+    if (guardado && guardado.expiraEm > Date.now()) {
+      if (guardado.final) resolvidos.set(url, guardado.final);
+    } else {
+      pendentes.push(url);
+    }
+  }
+  if (!pendentes.length) return resolvidos;
+
+  const candidatos = [
+    String(env.pythonPath || '').trim(),
+    process.platform === 'win32' ? 'python' : 'python3',
+    process.platform === 'win32' ? 'py' : 'python',
+  ].filter((item, index, lista) => item && lista.indexOf(item) === index);
+  for (const binario of candidatos) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const itens = await executarGooglePython(binario, { decode: pendentes.slice(0, 12) });
+      for (const item of itens) {
+        const final = /^https?:\/\//i.test(String(item?.final || '')) ? String(item.final) : '';
+        cacheDecode.set(item.link, { final, expiraEm: Date.now() + (final ? CACHE_DECODE_MS : 10 * 60 * 1000) });
+        if (final) resolvidos.set(item.link, final);
+      }
+      if (cacheDecode.size > 3000) cacheDecode.delete(cacheDecode.keys().next().value);
+      return resolvidos;
+    } catch (err) {
+      if (/ENOENT|não é reconhecido|not found/i.test(err.message)) continue;
+      console.warn('[google-decode]', err.message);
+      return resolvidos;
+    }
+  }
+  return resolvidos;
+}
+
 /** Fallback sem chave: Google News RSS + Google Notícias HTML via Python. */
 async function buscarGoogleNewsPython(
   termo,
@@ -758,6 +805,7 @@ module.exports = {
   pesquisarNichos,
   buscarGoogleNewsRss,
   buscarGoogleNewsPython,
+  decodificarLinksGoogle,
   buscarGoogleNewsEmAlta,
   buscarBraveNews,
   buscarSerperRedes,
