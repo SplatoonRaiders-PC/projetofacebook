@@ -1402,11 +1402,26 @@ async function repararAgendamentosSobrepostos(userId, { intervaloMinutos = INTER
     .orderBy('id', 'asc')
     .select('id', 'scheduled_at');
 
+  // A fila do Furos do dia agenda no intervalo escolhido pelo editor (ex.: 5 min):
+  // não é sobreposição, então não entra no espaçamento de 30 min.
+  let daFilaDoFuros = new Set();
+  try {
+    daFilaDoFuros = new Set(
+      (await db('furos_autopilot_itens')
+        .where({ user_id: userId, status: 'agendada' })
+        .whereNotNull('matter_id')
+        .select('matter_id')).map((r) => Number(r.matter_id))
+    );
+  } catch {
+    // tabela ainda não existe
+  }
+
   let cursor = null;
   let ajustados = 0;
   const intervaloMs = Math.max(5, Number(intervaloMinutos) || INTERVALO_AGENDAMENTO_MINUTOS) * 60 * 1000;
 
   for (const row of rows || []) {
+    if (daFilaDoFuros.has(Number(row.id))) continue;
     const atual = row.scheduled_at instanceof Date ? row.scheduled_at : new Date(row.scheduled_at);
     if (Number.isNaN(atual.getTime())) continue;
     const novo = cursor && atual.getTime() < cursor.getTime() ? cursor : atual;

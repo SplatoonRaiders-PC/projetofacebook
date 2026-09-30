@@ -244,7 +244,7 @@
     if (el.paginaCampo) el.paginaCampo.hidden = !publicar;
     if (el.destinoAjuda) {
       el.destinoAjuda.textContent = publicar
-        ? 'Cada matéria é escrita, ganha imagem com IA e entra na fila de publicação. Roda no servidor: pode fechar a página.'
+        ? 'Cada matéria é escrita, ganha imagem com IA e é AGENDADA (aparece em Matérias salvas › Agendados) para publicar sozinha no intervalo escolhido. Roda no servidor: pode fechar a página.'
         : 'Cada matéria é reescrita com texto e título próprios e fica como rascunho em Matérias salvas para você revisar.';
     }
     atualizarAcoes();
@@ -501,7 +501,7 @@
     escrevendo: 'Escrevendo a matéria…',
     aguardando_imagem: 'Esperando a vez da imagem com IA…',
     gerando_imagem: 'Gerando a imagem com IA…',
-    pronta: 'Pronta — sai no próximo horário',
+    pronta: 'Pronta — agendando…',
     publicando: 'Publicando…',
   };
 
@@ -523,7 +523,9 @@
         if (!item) continue;
         let texto = ETAPA_FILA[item.status];
         let fim = false;
-        if (item.status === 'publicada') {
+        if (item.status === 'agendada') {
+          texto = `Agendada para ${hora(item.agendado_para)}`;
+        } else if (item.status === 'publicada') {
           texto = `Publicada às ${hora(item.publicado_at)}`;
           fim = true;
         } else if (item.status === 'erro' || item.status === 'descartada') {
@@ -566,7 +568,7 @@
       const pagina = el.pagina?.selectedOptions?.[0]?.textContent || 'página padrão';
       setStatus(
         n
-          ? `${n} matéria${n > 1 ? 's' : ''} na fila: uma a cada ${Number(el.destino.value)} min em ${pagina}, cada uma com imagem com IA. Roda no servidor — acompanhe em Piloto automático.`
+          ? `${n} matéria${n > 1 ? 's' : ''} na fila: cada uma é escrita, ganha imagem com IA e é agendada — uma a cada ${Number(el.destino.value)} min em ${pagina}. Roda no servidor; os horários aparecem aqui e em Matérias salvas › Agendados.`
           : 'Nenhuma pauta entrou na fila.',
         n ? 'ok' : 'erro'
       );
@@ -586,7 +588,7 @@
     if (!fila.length || state.gerando) return;
     if (vaiPublicar()) {
       const pagina = el.pagina?.selectedOptions?.[0]?.textContent || 'página padrão';
-      if (!confirm(`Gerar e PUBLICAR ${fila.length} matéria(s) em ${pagina}?\n\nCada uma ganha imagem com IA e é publicada uma a cada ${Number(el.destino.value)} min.`)) return;
+      if (!confirm(`Gerar e AGENDAR ${fila.length} matéria(s) em ${pagina}?\n\nCada uma ganha imagem com IA e é agendada para publicar sozinha, uma a cada ${Number(el.destino.value)} min.`)) return;
       await publicarEmFila(fila);
       return;
     }

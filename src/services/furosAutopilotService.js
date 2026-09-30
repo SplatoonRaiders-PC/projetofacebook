@@ -10,7 +10,8 @@ const db = require('../config/db');
  *   3. escreve a matéria pelo mesmo caminho do chat do /materia-manual e com
  *      o modelo escolhido lá (notícia ilegível cai no redator de furos);
  *   4. gera a imagem com IA (ChatGPT), no máximo 2 ao mesmo tempo no servidor;
- *   5. publica na página a cada N minutos (intervalo do editor).
+ *   5. AGENDA a matéria pronta no agendador do sistema, uma a cada N minutos
+ *      (fica "Agendado" em Matérias salvas), e ele publica na hora marcada.
  *
  * As etapas andam em paralelo: enquanto uma imagem é gerada (a parte lenta),
  * a próxima matéria já está sendo escrita. Nada é publicado sem imagem.
@@ -216,7 +217,7 @@ async function statusPainel(userId) {
     db(CONFIG).where({ user_id: userId }).first(),
     db(ITENS)
       .where({ user_id: userId })
-      .whereIn('status', ['na_fila', ...EM_ANDAMENTO, 'publicando'])
+      .whereIn('status', ['na_fila', ...EM_ANDAMENTO, 'agendada', 'publicando'])
       .groupBy('status')
       .select('status')
       .count({ n: '*' })
@@ -230,13 +231,13 @@ async function statusPainel(userId) {
     db(`${ITENS} as i`)
       .leftJoin('ai_matters as m', 'm.id', 'i.matter_id')
       .where('i.user_id', userId)
-      .whereIn('i.status', ['na_fila', ...EM_ANDAMENTO, 'publicando', 'publicada', 'erro'])
+      .whereIn('i.status', ['na_fila', ...EM_ANDAMENTO, 'agendada', 'publicando', 'publicada', 'erro'])
       .where('i.updated_at', '>=', recente)
       .orderBy('i.updated_at', 'desc')
       .limit(30)
       .select(
         'i.id', 'i.origem', 'i.canal', 'i.titulo', 'i.url', 'i.status', 'i.nota_ia', 'i.score', 'i.motivo',
-        'i.erro', 'i.matter_id', 'i.imagem_ia', 'i.publicado_at', 'i.updated_at',
+        'i.erro', 'i.matter_id', 'i.imagem_ia', 'i.publicado_at', 'i.agendado_para', 'i.updated_at',
         'm.titulo as materia_titulo'
       )
       .catch(tabelaAusente),
@@ -251,7 +252,7 @@ async function statusPainel(userId) {
     // Escolhidas pelo editor ainda a caminho (andam mesmo com o piloto pausado).
     db(ITENS)
       .where({ user_id: userId, origem: 'manual' })
-      .whereIn('status', ['na_fila', ...EM_ANDAMENTO, 'publicando'])
+      .whereIn('status', ['na_fila', ...EM_ANDAMENTO, 'agendada', 'publicando'])
       .count({ n: '*' })
       .first()
       .catch(tabelaAusente),
@@ -291,6 +292,13 @@ async function pausar(userId) {
   const row = await db(CONFIG).where({ user_id: userId }).first();
   if (!row) throw erro(400, 'O piloto automático ainda não foi configurado.');
   if (row.ativo) await atualizarConfig(userId, { ativo: false, pausado_at: new Date() });
+  const agendadas = await db(ITENS).where({ user_id: userId, status: 'agendada', origem: 'auto' });
+  for (const item of agendadas) {
+    if (await desagendar(item, 'Piloto pausado pelo editor.')) {
+      await atualizarItem(item.id, { status: 'pronta', agendado_para: null });
+    }
+  }
+  if (agendadas.length) await atualizarConfig(userId, { proxima_postagem_at: null });
   return statusPainel(userId);
 }
 
@@ -378,7 +386,7 @@ async function enfileirarEscolhidas(userId, entrada = {}) {
       ignoradas.push({ titulo: pauta.titulo, motivo: 'já foi publicada pelo piloto' });
       continue;
     }
-    if (existente && ['na_fila', ...EM_ANDAMENTO, 'publicando'].includes(existente.status)) {
+    if (existente && ['na_fila', ...EM_ANDAMENTO, 'agendada', 'publicando'].includes(existente.status)) {
       await atualizarItem(existente.id, { origem: 'manual' });
       adicionadas.push({ id: existente.id, url: pauta.url, titulo: pauta.titulo });
       continue;
@@ -417,6 +425,12 @@ async function enfileirarEscolhidas(userId, entrada = {}) {
 
 /** Tira da fila tudo o que o editor escolheu e ainda não saiu. */
 async function cancelarFilaManual(userId) {
+  const agendadas = await db(ITENS).where({ user_id: userId, status: 'agendada', origem: 'manual' });
+  for (const item of agendadas) {
+    if (await desagendar(item, 'Fila cancelada pelo editor.')) {
+      await atualizarItem(item.id, { status: 'descartada', agendado_para: null, erro: 'Fila cancelada pelo editor.' });
+    }
+  }
   await db(ITENS)
     .where({ user_id: userId, origem: 'manual' })
     .whereIn('status', ['na_fila', ...EM_ANDAMENTO])
@@ -434,10 +448,13 @@ async function escanearAgora(userId) {
 async function descartarItem(userId, itemId) {
   const item = await db(ITENS).where({ id: itemId, user_id: userId }).first();
   if (!item) throw erro(404, 'Pauta não encontrada.');
-  if (!['na_fila', 'aguardando_imagem', 'pronta', 'erro'].includes(item.status)) {
+  if (!['na_fila', 'aguardando_imagem', 'pronta', 'agendada', 'erro'].includes(item.status)) {
     throw erro(409, 'Esta pauta já está sendo processada ou foi publicada.');
   }
-  await atualizarItem(item.id, { status: 'descartada', erro: 'Retirada da fila pelo editor.' });
+  if (item.status === 'agendada' && !(await desagendar(item, 'Retirada da fila pelo editor.'))) {
+    throw erro(409, 'Esta matéria já foi publicada.');
+  }
+  await atualizarItem(item.id, { status: 'descartada', agendado_para: null, erro: 'Retirada da fila pelo editor.' });
   return statusPainel(userId);
 }
 
@@ -758,7 +775,10 @@ async function avancarEscrita(row) {
     .whereIn('status', EM_ANDAMENTO)
     .count({ n: '*' })
     .first();
-  if ((Number(noCaminho?.n) || 0) >= BUFFER_ALVO) return;
+  const agendadasDaIa = row.ativo
+    ? await db(ITENS).where({ user_id: userId, status: 'agendada', origem: 'auto' }).count({ n: '*' }).first()
+    : null;
+  if ((Number(noCaminho?.n) || 0) + (Number(agendadasDaIa?.n) || 0) >= BUFFER_ALVO) return;
 
   const item = await soQuandoPermitido(db(ITENS).where({ user_id: userId, status: 'na_fila' }), row)
     .orderByRaw(ORDEM_FILA)
@@ -921,6 +941,12 @@ async function motivoDeDuplicata(userId, item, matter) {
     .where('i.status', 'publicada')
     .where('i.publicado_at', '>=', desde)
     .select('i.titulo', 'm.titulo as materia_titulo');
+  const agendadasDaFila = await db(ITENS)
+    .where({ user_id: userId, status: 'agendada' })
+    .whereNot('id', item.id)
+    .select('titulo');
+  const repetidaAgendada = agendadasDaFila.find((p) => parecido(p.titulo));
+  if (repetidaAgendada) return `mesmo assunto de “${tituloLimpo(repetidaAgendada.titulo)}”, já agendado na fila`;
   const repetidoPiloto = doPiloto.find((p) => parecido(p.materia_titulo) || parecido(p.titulo));
   if (repetidoPiloto) return `mesmo assunto de “${tituloLimpo(repetidoPiloto.materia_titulo || repetidoPiloto.titulo)}”, já publicado pelo piloto`;
 
@@ -942,54 +968,130 @@ async function motivoDeDuplicata(userId, item, matter) {
   return null;
 }
 
-async function tentarPublicar(row) {
+/**
+ * Tira o agendamento de uma matéria que ainda não saiu (pausa, cancelamento,
+ * retirada da fila). Devolve false se ela já foi publicada.
+ */
+async function desagendar(item, motivo) {
+  if (!item.matter_id) return true;
+  const AiMatters = require('../models/AiMatters');
+  const matter = await AiMatters.findById(item.matter_id);
+  if (!matter) return true;
+  if (String(matter.status) === 'publicado' || matter.publication_id) return false;
+  if (String(matter.status) === 'agendado') {
+    await AiMatters.update(item.matter_id, { status: 'rascunho', scheduled_at: null });
+  }
+  await db('ai_fila_jobs')
+    .where({ matter_id: item.matter_id, status: 'pendente' })
+    .update({ status: 'cancelado', erro: corta(motivo, 500), updated_at: db.fn.now() });
+  return true;
+}
+
+/** Quantas já saíram hoje + quantas estão agendadas para hoje (limite diário). */
+async function ocupadasNoDia(userId) {
+  const inicio = inicioDoDia();
+  const fimDoDia = new Date(inicio.getTime() + 24 * 3_600_000);
+  const [publicadas, agendadas] = await Promise.all([
+    db(ITENS).where({ user_id: userId, status: 'publicada' }).where('publicado_at', '>=', inicio).count({ n: '*' }).first(),
+    db(ITENS).where({ user_id: userId, status: 'agendada' }).where('agendado_para', '<', fimDoDia).count({ n: '*' }).first(),
+  ]);
+  return (Number(publicadas?.n) || 0) + (Number(agendadas?.n) || 0);
+}
+
+/**
+ * Matéria pronta (texto + imagem) é AGENDADA no agendador do sistema: fica
+ * "Agendado" em Matérias salvas com dia e hora, uma a cada `intervalo_minutos`,
+ * e quem publica é o agendador (tickFilaJobs), na hora marcada.
+ */
+async function agendarProntas(row) {
   const userId = Number(row.user_id);
   if (publicando.has(userId)) return;
-  const proxima = row.proxima_postagem_at ? new Date(row.proxima_postagem_at).getTime() : 0;
-  if (proxima > Date.now()) return;
-
-  const hoje = await db(ITENS)
-    .where({ user_id: userId, status: 'publicada' })
-    .where('publicado_at', '>=', inicioDoDia())
-    .count({ n: '*' })
-    .first();
-  if ((Number(hoje?.n) || 0) >= Number(row.limite_dia || 40)) return;
-
-  const item = await soQuandoPermitido(db(ITENS).where({ user_id: userId, status: 'pronta' }), row)
-    .orderByRaw(ORDEM_FILA)
-    .first();
-  if (!item) return;
-
   publicando.add(userId);
-  const intervaloMs = (Number(row.intervalo_minutos) || 10) * 60_000;
   try {
-    const reservado = await db(ITENS).where({ id: item.id, status: 'pronta' })
-      .update({ status: 'publicando', updated_at: db.fn.now() });
-    if (!reservado) return;
-    const matter = await require('../models/AiMatters').findById(item.matter_id);
-    if (!matter) throw new Error('a matéria foi apagada');
-    if (!matter.imagem_path && !matter.imagem_url) throw new Error('a matéria está sem imagem');
-    const duplicata = await motivoDeDuplicata(userId, item, matter);
-    if (duplicata) {
-      // Não gasta o intervalo: a próxima pronta sai na volta seguinte.
-      console.info(`[furos-auto] user ${userId}: item ${item.id} não publicado (duplicata): ${duplicata}`);
-      await atualizarItem(item.id, { status: 'descartada', erro: corta(`Não publicada para não duplicar: ${duplicata}.`, 500) });
-      return;
+    const prontas = await soQuandoPermitido(db(ITENS).where({ user_id: userId, status: 'pronta' }), row)
+      .orderByRaw(ORDEM_FILA)
+      .limit(10);
+    const AiMatters = require('../models/AiMatters');
+    const AiFilaJobs = require('../models/AiFilaJobs');
+    const intervaloMs = (Number(row.intervalo_minutos) || 10) * 60_000;
+    for (const item of prontas) {
+      if ((await ocupadasNoDia(userId)) >= Number(row.limite_dia || 40)) return;
+      const matter = await AiMatters.findById(item.matter_id);
+      if (!matter) {
+        await atualizarItem(item.id, { status: 'erro', erro: 'A matéria foi apagada.' });
+        continue;
+      }
+      if (!matter.imagem_path && !matter.imagem_url) {
+        await atualizarItem(item.id, { status: 'erro', erro: 'A matéria está sem imagem. Não agendada.' });
+        continue;
+      }
+      const duplicata = await motivoDeDuplicata(userId, item, matter);
+      if (duplicata) {
+        console.info(`[furos-auto] user ${userId}: item ${item.id} não agendado (duplicata): ${duplicata}`);
+        await atualizarItem(item.id, { status: 'descartada', erro: corta(`Não agendada para não duplicar: ${duplicata}.`, 500) });
+        continue;
+      }
+
+      // Próximo horário livre da fila: agora ou o intervalo depois da anterior.
+      const cfg = await db(CONFIG).where({ user_id: userId }).first();
+      const proxima = cfg?.proxima_postagem_at ? new Date(cfg.proxima_postagem_at).getTime() : 0;
+      const horario = new Date(Math.max(Date.now(), proxima));
+
+      await AiMatters.update(item.matter_id, {
+        status: 'agendado',
+        scheduled_at: horario,
+        ...(row.facebook_page_id ? { facebook_page_id: row.facebook_page_id } : {}),
+      });
+      const job = await db('ai_fila_jobs').where({ matter_id: item.matter_id, status: 'pendente' }).first('id');
+      if (job) await AiFilaJobs.update(job.id, { run_at: horario });
+      else {
+        await AiFilaJobs.create({
+          user_id: userId,
+          matter_id: item.matter_id,
+          run_at: horario,
+          status: 'pendente',
+          payload: JSON.stringify({ action: 'publish', matterId: item.matter_id, origem: 'furos' }),
+        });
+      }
+      await atualizarItem(item.id, { status: 'agendada', agendado_para: horario, erro: null });
+      await atualizarConfig(userId, { proxima_postagem_at: new Date(horario.getTime() + intervaloMs), ultimo_erro: null });
+      console.info(`[furos-auto] user ${userId}: matéria ${item.matter_id} agendada para ${horario.toISOString()}`);
     }
-    await require('./materiaIaService').publicarMateria(userId, item.matter_id);
-    await atualizarItem(item.id, { status: 'publicada', publicado_at: new Date(), erro: null });
-    await atualizarConfig(userId, { proxima_postagem_at: new Date(Date.now() + intervaloMs), ultimo_erro: null });
-    console.info(`[furos-auto] user ${userId}: publicada matéria ${item.matter_id}`);
   } catch (err) {
-    console.warn(`[furos-auto] publicar item ${item.id}:`, err.message);
-    await atualizarItem(item.id, { status: 'erro', erro: corta(`Publicação: ${err.message}`, 500) });
-    // Tenta a próxima pronta daqui a 1 min, sem esperar o intervalo inteiro.
-    await atualizarConfig(userId, {
-      proxima_postagem_at: new Date(Date.now() + 60_000),
-      ultimo_erro: corta(`Publicação: ${err.message}`, 500),
-    });
+    console.warn(`[furos-auto] agendar user ${userId}:`, err.message);
+    await atualizarConfig(userId, { ultimo_erro: corta(`Agendamento: ${err.message}`, 500) }).catch(() => {});
   } finally {
     publicando.delete(userId);
+  }
+}
+
+/**
+ * O agendador do sistema publica; aqui o piloto só acompanha: publicada,
+ * falhou no envio ou teve o agendamento desfeito na própria matéria.
+ */
+async function acompanharAgendadas(userId) {
+  const agendadas = await db(ITENS).where({ user_id: userId, status: 'agendada' }).limit(50);
+  if (!agendadas.length) return;
+  const AiMatters = require('../models/AiMatters');
+  for (const item of agendadas) {
+    const matter = item.matter_id ? await AiMatters.findById(item.matter_id) : null;
+    if (!matter) {
+      await atualizarItem(item.id, { status: 'erro', erro: 'A matéria agendada foi apagada.' });
+      continue;
+    }
+    if (String(matter.status) === 'publicado' || matter.publication_id) {
+      await atualizarItem(item.id, { status: 'publicada', publicado_at: new Date(), erro: null });
+      continue;
+    }
+    if (String(matter.status) === 'agendado') {
+      const job = await db('ai_fila_jobs').where({ matter_id: item.matter_id }).orderBy('id', 'desc').first('status', 'erro');
+      if (job?.status === 'erro') {
+        await atualizarItem(item.id, { status: 'erro', erro: corta(`Publicação: ${job.erro || 'falhou no envio'}`, 500) });
+      }
+      continue;
+    }
+    // O editor tirou o agendamento direto na matéria.
+    await atualizarItem(item.id, { status: 'descartada', erro: 'O agendamento foi desfeito na matéria.' });
   }
 }
 
@@ -1032,7 +1134,7 @@ async function tick() {
       // Quem tem pautas escolhidas no Furos do dia também anda, mesmo pausado.
       const comFila = [...new Set((await db(ITENS)
         .where({ origem: 'manual' })
-        .whereIn('status', ['na_fila', ...EM_ANDAMENTO])
+        .whereIn('status', ['na_fila', ...EM_ANDAMENTO, 'agendada'])
         .select('user_id')).map((r) => Number(r.user_id)))]
         .filter((id) => !usuariosAtivos.has(id));
       const pausados = comFila.length ? await db(CONFIG).whereIn('user_id', comFila) : [];
@@ -1048,7 +1150,8 @@ async function tick() {
         // Varredura só com o Automatizar ligado.
         if (row.ativo && Date.now() - ultimo >= SCAN_MS) void escanear(row);
         void avancarEscrita(row).catch((err) => console.warn('[furos-auto] escrita:', err.message));
-        await tentarPublicar(row);
+        await agendarProntas(row);
+        await acompanharAgendadas(row.user_id);
       } catch (err) {
         console.warn(`[furos-auto] user ${row.user_id}:`, err.message);
       }

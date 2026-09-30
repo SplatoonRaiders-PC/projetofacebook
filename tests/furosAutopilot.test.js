@@ -102,6 +102,7 @@ function carregar({ imagem, avaliacoes = null, furos = [], gerarFuro = null, gat
       foto_original_se_falhar: true, ultimo_scan_at: new Date(), proxima_postagem_at: null, nichos: '["auto"]', canais: '["noticias"]', horas: 24 }],
     furos_autopilot_itens: [],
     ai_matters: [],
+    ai_fila_jobs: [],
   };
   const matters = new Map();
   const eventos = { imagensJuntas: 0, maxImagens: 0, escritasDuranteImagem: 0, publicadas: [] };
@@ -142,9 +143,18 @@ function carregar({ imagem, avaliacoes = null, furos = [], gerarFuro = null, gat
       },
     },
     '../models/Publications': { historyForDedupe: async () => [] },
+    '../models/AiFilaJobs': {
+      create: async (dados) => {
+        tabelas.ai_fila_jobs.push({ id: tabelas.ai_fila_jobs.length + 1, ...dados });
+        return [tabelas.ai_fila_jobs.length];
+      },
+      update: async (id, dados) => Object.assign(tabelas.ai_fila_jobs.find((j) => j.id === id) || {}, dados),
+    },
     '../models/AiMatters': {
-      findById: async (id) => matters.get(Number(id)) || null,
-      update: async () => {},
+      findById: async (id) => (matters.has(Number(id)) ? { ...matters.get(Number(id)) } : null),
+      update: async (id, dados) => {
+        if (matters.has(Number(id))) Object.assign(matters.get(Number(id)), dados);
+      },
       findViralizadasDaConta: async () => [{ titulo: 'Base', pub_fb_likes: 100, facebook_page_id: 7 }],
     },
     './materiaIaService': {
@@ -177,7 +187,19 @@ function carregar({ imagem, avaliacoes = null, furos = [], gerarFuro = null, gat
     module, exports: module.exports, process, console, setTimeout, clearTimeout, setInterval, setImmediate, Date, URL,
     require: (id) => (Object.hasOwn(mocks, id) ? mocks[id] : realRequire(id)),
   }, { filename });
-  return { service: module.exports, tabelas, eventos, matters };
+  /** Simula o agendador do sistema (tickFilaJobs): publica o que venceu. */
+  const agendador = () => {
+    for (const job of tabelas.ai_fila_jobs) {
+      if (job.status !== 'pendente' || new Date(job.run_at).getTime() > Date.now()) continue;
+      const matter = matters.get(Number(job.matter_id));
+      if (!matter || matter.status !== 'agendado') continue;
+      matter.status = 'publicado';
+      job.status = 'feito';
+      eventos.publicadas.push(Number(job.matter_id));
+    }
+  };
+  const service = { ...module.exports, tick: async () => { await module.exports.tick(); agendador(); } };
+  return { service, tabelas, eventos, matters, agendador };
 }
 
 const MANCHETES = [
@@ -195,9 +217,20 @@ function naFila(tabelas, n, titulos = MANCHETES) {
     tabelas.furos_autopilot_itens.push({
       id: i, user_id: 1, chave: `k${i}`, canal: 'noticias', titulo, url: `https://ex.test/${i}`,
       pauta: JSON.stringify({ titulo, url: `https://ex.test/${i}` }), score: 50 - i, nota_ia: 90 - i,
-      status: 'na_fila', tentativas: 0, created_at: new Date(), updated_at: new Date(),
+      status: 'na_fila', origem: 'auto', tentativas: 0, created_at: new Date(), updated_at: new Date(),
     });
   }
+}
+
+function avancarAteProximoAgendamento(ctx) {
+  const pendentes = ctx.tabelas.furos_autopilot_itens
+    .filter((i) => i.status === 'agendada')
+    .sort((a, b) => new Date(a.agendado_para) - new Date(b.agendado_para));
+  const proximo = pendentes[0];
+  if (!proximo) return null;
+  const job = ctx.tabelas.ai_fila_jobs.find((j) => j.matter_id === proximo.matter_id && j.status === 'pendente');
+  if (job) job.run_at = new Date(Date.now() - 1000);
+  return proximo;
 }
 
 async function rodar(service, voltas, ms = 15) {
@@ -215,18 +248,28 @@ test('no máximo 2 imagens ao mesmo tempo, com a escrita andando em paralelo', a
   assert.ok(ctx.eventos.escritasDuranteImagem >= 1, 'escreveu outra matéria enquanto gerava imagem');
 });
 
-test('publica uma por intervalo e só com imagem pronta', async () => {
+test('agenda uma por intervalo (Agendado em Matérias salvas) e o agendador publica', async () => {
   const ctx = carregar({ imagem: () => esperar(5) });
   naFila(ctx.tabelas, 4);
   await rodar(ctx.service, 20);
-  // A primeira sai logo; as outras esperam os 10 min do intervalo.
+  // A primeira é agendada para já e sai; as outras ficam agendadas a cada 10 min.
   assert.equal(ctx.eventos.publicadas.length, 1);
-  const cfg = ctx.tabelas.furos_autopilot[0];
-  assert.ok(new Date(cfg.proxima_postagem_at).getTime() - Date.now() > 9 * 60_000);
-  // Passado o intervalo, sai a próxima (a de maior nota).
-  cfg.proxima_postagem_at = new Date(Date.now() - 1000);
+  const agendadas = ctx.tabelas.furos_autopilot_itens.filter((i) => i.status === 'agendada')
+    .sort((a, b) => new Date(a.agendado_para) - new Date(b.agendado_para));
+  assert.ok(agendadas.length >= 2);
+  const passo = new Date(agendadas[1].agendado_para) - new Date(agendadas[0].agendado_para);
+  assert.equal(Math.round(passo / 60_000), 10);
+  for (const item of agendadas) {
+    const matter = ctx.matters.get(item.matter_id);
+    assert.equal(matter.status, 'agendado');
+    assert.equal(new Date(matter.scheduled_at).getTime(), new Date(item.agendado_para).getTime());
+    assert.ok(ctx.tabelas.ai_fila_jobs.some((j) => j.matter_id === item.matter_id && j.status === 'pendente'));
+  }
+  // Chegou o horário da próxima: o agendador do sistema publica e o piloto marca.
+  const proxima = avancarAteProximoAgendamento(ctx);
   await rodar(ctx.service, 3);
   assert.equal(ctx.eventos.publicadas.length, 2);
+  assert.equal(ctx.tabelas.furos_autopilot_itens.find((i) => i.id === proxima.id).status, 'publicada');
   const publicadas = ctx.tabelas.furos_autopilot_itens.filter((i) => i.status === 'publicada');
   assert.ok(publicadas.every((i) => i.imagem_ia === true));
 });
@@ -314,7 +357,7 @@ test('painel: marcar Automatizar confirma e envia filtros, intervalo e página',
   }
 });
 
-test('não publica duas vezes o mesmo assunto, mesmo vindo de veículos diferentes', async () => {
+test('não agenda duas vezes o mesmo assunto, mesmo vindo de veículos diferentes', async () => {
   const ctx = carregar({ imagem: () => esperar(5) });
   naFila(ctx.tabelas, 3, [
     'Fux suspende decisão de Dino e retoma ordem contra fake news sobre Nossa Senhora',
@@ -322,11 +365,8 @@ test('não publica duas vezes o mesmo assunto, mesmo vindo de veículos diferent
     'Congresso recebe medida provisória que proíbe apostas esportivas',
   ]);
   await rodar(ctx.service, 15);
-  // Libera o intervalo duas vezes: a 2ª versão do mesmo fato não pode sair.
-  for (let i = 0; i < 2; i += 1) {
-    ctx.tabelas.furos_autopilot[0].proxima_postagem_at = new Date(Date.now() - 1000);
-    await rodar(ctx.service, 4);
-  }
+  avancarAteProximoAgendamento(ctx);
+  await rodar(ctx.service, 4);
   const porStatus = Object.fromEntries(ctx.tabelas.furos_autopilot_itens.map((i) => [i.id, i.status]));
   assert.equal(porStatus[1], 'publicada');
   assert.equal(porStatus[2], 'descartada');
@@ -552,23 +592,27 @@ const PAUTAS_ESCOLHIDAS = [
   { canal: 'noticias', titulo: 'Congresso recebe medida provisória que proíbe apostas esportivas', url: 'https://ex.test/m2', score: 20 },
 ];
 
-test('fila escolhida: com o Automatizar desligado, escreve, gera imagem e publica no intervalo escolhido', async () => {
+test('fila escolhida: com o Automatizar desligado, escreve, gera imagem e AGENDA no intervalo escolhido', async () => {
   const ctx = carregar({ imagem: () => esperar(5) });
   Object.assign(ctx.tabelas.furos_autopilot[0], { ativo: false, proxima_postagem_at: null });
   const r = await ctx.service.enfileirarEscolhidas(1, { pautas: PAUTAS_ESCOLHIDAS, intervalo_minutos: 5, facebook_page_id: 7 });
   assert.equal(r.adicionadas.length, 2);
   assert.ok(ctx.tabelas.furos_autopilot_itens.every((i) => i.origem === 'manual'));
   await rodar(ctx.service, 15);
-  // A primeira sai logo; a segunda espera os 5 minutos.
+  // As duas ficam agendadas (5 min de diferença); a primeira já saiu.
+  const itens = ctx.tabelas.furos_autopilot_itens;
   assert.equal(ctx.eventos.publicadas.length, 1);
-  const cfg = ctx.tabelas.furos_autopilot[0];
-  const espera = new Date(cfg.proxima_postagem_at).getTime() - Date.now();
-  assert.ok(espera > 4 * 60_000 && espera <= 5 * 60_000);
-  assert.equal(cfg.ativo, false);
-  cfg.proxima_postagem_at = new Date(Date.now() - 1000);
+  const segunda = itens.find((i) => i.status === 'agendada');
+  assert.ok(segunda);
+  assert.equal(ctx.matters.get(segunda.matter_id).status, 'agendado');
+  const primeira = itens.find((i) => i.status === 'publicada');
+  const passo = new Date(segunda.agendado_para) - new Date(ctx.tabelas.ai_fila_jobs.find((j) => j.matter_id === primeira.matter_id).run_at);
+  assert.equal(Math.round(passo / 60_000), 5);
+  assert.equal(ctx.tabelas.furos_autopilot[0].ativo, false);
+  avancarAteProximoAgendamento(ctx);
   await rodar(ctx.service, 4);
   assert.equal(ctx.eventos.publicadas.length, 2);
-  assert.ok(ctx.tabelas.furos_autopilot_itens.every((i) => i.status === 'publicada' && i.imagem_ia === true));
+  assert.ok(itens.every((i) => i.status === 'publicada' && i.imagem_ia === true));
   // Sem varredura: nada de busca com o Automatizar desligado.
   assert.equal((ctx.eventos.buscas || []).length, 0);
 });
@@ -652,4 +696,31 @@ test('Furos: "Publicar 1 a cada 5 min" manda as marcadas para a fila e acompanha
   } finally {
     window.close();
   }
+});
+
+test('pausar desfaz os agendamentos da IA que ainda não saíram; cancelar a fila desfaz os escolhidos', async () => {
+  const ctx = carregar({ imagem: () => esperar(5) });
+  naFila(ctx.tabelas, 3);
+  await rodar(ctx.service, 15);
+  const agendadaIa = ctx.tabelas.furos_autopilot_itens.find((i) => i.status === 'agendada');
+  assert.ok(agendadaIa);
+  await ctx.service.pausar(1);
+  assert.equal(agendadaIa.status, 'pronta');
+  assert.equal(ctx.matters.get(agendadaIa.matter_id).status, 'rascunho');
+  assert.ok(!ctx.tabelas.ai_fila_jobs.some((j) => j.matter_id === agendadaIa.matter_id && j.status === 'pendente'));
+
+  await ctx.service.enfileirarEscolhidas(1, {
+    pautas: [
+      { canal: 'noticias', titulo: 'Prefeitura anuncia mutirão de vacinação no fim de semana', url: 'https://ex.test/v1', score: 30 },
+      { canal: 'noticias', titulo: 'Seleção feminina vence amistoso e garante vaga no torneio', url: 'https://ex.test/v2', score: 20 },
+    ],
+    intervalo_minutos: 5,
+    facebook_page_id: 7,
+  });
+  await rodar(ctx.service, 15);
+  const escolhidaAgendada = ctx.tabelas.furos_autopilot_itens.find((i) => i.origem === 'manual' && i.status === 'agendada');
+  assert.ok(escolhidaAgendada);
+  await ctx.service.cancelarFilaManual(1);
+  assert.equal(escolhidaAgendada.status, 'descartada');
+  assert.equal(ctx.matters.get(escolhidaAgendada.matter_id).status, 'rascunho');
 });

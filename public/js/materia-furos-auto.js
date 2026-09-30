@@ -32,7 +32,8 @@
     escrevendo: ['Escrevendo', 'is-andamento'],
     aguardando_imagem: ['Aguardando imagem', 'is-fila'],
     gerando_imagem: ['Gerando imagem com IA', 'is-andamento'],
-    pronta: ['Pronta para publicar', 'is-pronta'],
+    pronta: ['Pronta para agendar', 'is-pronta'],
+    agendada: ['Agendada', 'is-pronta'],
     publicando: ['Publicando', 'is-andamento'],
     publicada: ['Publicada', 'is-publicada'],
     erro: ['Não publicada', 'is-erro'],
@@ -187,7 +188,7 @@
         `fila ${contagens.na_fila || 0}`,
         `escrevendo ${contagens.escrevendo || 0}`,
         `imagem ${imagens}/${status.maxImagens || 2} (+${contagens.aguardando_imagem || 0} aguardando)`,
-        `prontas ${contagens.pronta || 0}`,
+        `agendadas ${contagens.agendada || 0}`,
       ];
       setResumo(
         partes.filter(Boolean).join(' · ') +
@@ -214,6 +215,7 @@
         CANAL[item.canal] || item.canal,
         item.nota_ia != null ? `nota ${item.nota_ia}` : null,
         item.status === 'publicada' && item.publicado_at ? `às ${hora(item.publicado_at)}` : null,
+        item.status === 'agendada' && item.agendado_para ? `sai às ${hora(item.agendado_para)}` : null,
         item.status === 'pronta' || item.status === 'publicada' ? (item.imagem_ia ? 'imagem IA' : 'foto original') : null,
         item.erro || item.motivo,
       ].filter(Boolean).join(' · ');

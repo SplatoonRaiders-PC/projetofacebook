@@ -29,7 +29,8 @@
     escrevendo: ['Escrevendo', 'bg-sky-500/15 text-sky-300'],
     aguardando_imagem: ['Aguardando imagem', 'bg-slate-500/20 text-slate-300'],
     gerando_imagem: ['Gerando imagem com IA', 'bg-sky-500/15 text-sky-300'],
-    pronta: ['Pronta para publicar', 'bg-amber-500/15 text-amber-300'],
+    pronta: ['Pronta para agendar', 'bg-amber-500/15 text-amber-300'],
+    agendada: ['Agendada', 'bg-amber-500/15 text-amber-300'],
     publicando: ['Publicando', 'bg-sky-500/15 text-sky-300'],
     publicada: ['Publicada', 'bg-emerald-500/15 text-emerald-300'],
     erro: ['Não publicada', 'bg-rose-500/15 text-rose-300'],
@@ -118,8 +119,8 @@
           `Publica a cada ${config.intervalo_minutos} min (até ${config.limite_dia} por dia)`,
           s.modeloNome ? `escreve com ${s.modeloNome}` : null,
           config.proxima_postagem_at && new Date(config.proxima_postagem_at) > new Date()
-            ? `próxima postagem às ${quando(config.proxima_postagem_at)}`
-            : 'publica a próxima assim que ficar pronta',
+            ? `próximo horário livre às ${quando(config.proxima_postagem_at)}`
+            : 'agenda a próxima assim que ficar pronta',
           s.escaneandoAgora ? 'procurando pautas agora…' : s.proximoScan ? `próxima varredura às ${quando(s.proximoScan)}` : 'varrendo em instantes',
         ].filter(Boolean).join(' · ')
       : filaManual
@@ -144,7 +145,7 @@
     $('piloto-n-fila').textContent = contagens.na_fila || 0;
     $('piloto-n-escrevendo').textContent = contagens.escrevendo || 0;
     $('piloto-n-imagem').textContent = `${imagens}/${s.maxImagens || 2}${contagens.aguardando_imagem ? ` +${contagens.aguardando_imagem}` : ''}`;
-    $('piloto-n-prontas').textContent = contagens.pronta || 0;
+    $('piloto-n-prontas').textContent = `${contagens.agendada || 0}${contagens.pronta ? ` +${contagens.pronta}` : ''}`;
     $('piloto-n-hoje').textContent = config.existe ? `${publicadasHoje}/${config.limite_dia}` : publicadasHoje;
 
     el.itens.replaceChildren();
@@ -168,7 +169,11 @@
         CANAL[item.canal] || item.canal,
         item.origem === 'manual' ? 'escolhida por você' : null,
         item.nota_ia != null ? `nota ${item.nota_ia}` : null,
-        item.status === 'publicada' && item.publicado_at ? `publicada ${quando(item.publicado_at)}` : quando(item.updated_at),
+        item.status === 'publicada' && item.publicado_at
+          ? `publicada ${quando(item.publicado_at)}`
+          : item.status === 'agendada' && item.agendado_para
+            ? `sai ${quando(item.agendado_para, { comDia: true })}`
+            : quando(item.updated_at),
         ['pronta', 'publicada'].includes(item.status) ? (item.imagem_ia ? 'imagem IA' : 'foto original') : null,
         item.erro || item.motivo,
       ].filter(Boolean).join(' · ');
@@ -183,7 +188,7 @@
       if (item.status === 'erro') {
         li.append(botao('Tentar de novo', 'Volta para a etapa em que parou', (b) => acao(`${API}/itens/${item.id}/refazer`, b)));
       }
-      if (['na_fila', 'aguardando_imagem', 'pronta', 'erro'].includes(item.status)) {
+      if (['na_fila', 'aguardando_imagem', 'pronta', 'agendada', 'erro'].includes(item.status)) {
         const tirar = document.createElement('button');
         tirar.type = 'button';
         tirar.className = 'shrink-0 rounded-md border border-slate-700 px-2 text-slate-400 hover:border-rose-500 hover:text-rose-300';

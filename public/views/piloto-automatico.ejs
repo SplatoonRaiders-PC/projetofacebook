@@ -7,7 +7,7 @@
       <h1 class="mt-1 text-2xl font-semibold text-white">Piloto automático</h1>
       <p class="mt-2 max-w-2xl text-sm leading-relaxed text-slate-400">
         Roda no servidor: pode fechar o navegador ou desligar o computador que ele continua procurando pautas,
-        escrevendo, gerando a imagem e publicando. Use esta página para acompanhar, pausar ou retomar.
+        escrevendo, gerando a imagem e agendando (cada matéria fica "Agendado" em Matérias salvas e sai sozinha na hora marcada). Use esta página para acompanhar, pausar ou retomar.
       </p>
     </div>
     <a href="/materia-manual?furos=1" class="rounded-lg border border-slate-700 px-4 py-2 text-sm text-slate-300 hover:border-emerald-500 hover:text-emerald-300">Configurar no Furos do dia</a>
@@ -36,7 +36,7 @@
       <div class="rounded-xl border border-slate-800 bg-slate-950/60 p-3"><dt class="text-xs text-slate-400">Na fila</dt><dd id="piloto-n-fila" class="mt-1 text-xl font-semibold text-white">–</dd></div>
       <div class="rounded-xl border border-slate-800 bg-slate-950/60 p-3"><dt class="text-xs text-slate-400">Escrevendo</dt><dd id="piloto-n-escrevendo" class="mt-1 text-xl font-semibold text-white">–</dd></div>
       <div class="rounded-xl border border-slate-800 bg-slate-950/60 p-3"><dt class="text-xs text-slate-400">Imagem com IA</dt><dd id="piloto-n-imagem" class="mt-1 text-xl font-semibold text-white">–</dd></div>
-      <div class="rounded-xl border border-slate-800 bg-slate-950/60 p-3"><dt class="text-xs text-slate-400">Prontas</dt><dd id="piloto-n-prontas" class="mt-1 text-xl font-semibold text-white">–</dd></div>
+      <div class="rounded-xl border border-slate-800 bg-slate-950/60 p-3"><dt class="text-xs text-slate-400">Agendadas</dt><dd id="piloto-n-prontas" class="mt-1 text-xl font-semibold text-white">–</dd></div>
       <div class="rounded-xl border border-slate-800 bg-slate-950/60 p-3"><dt class="text-xs text-slate-400">Publicadas hoje</dt><dd id="piloto-n-hoje" class="mt-1 text-xl font-semibold text-white">–</dd></div>
     </dl>
   </section>
@@ -57,5 +57,5 @@
   </details>
 </main>
 
-<script src="/js/piloto-automatico.js?v=20260930piloto4"></script>
+<script src="/js/piloto-automatico.js?v=20260930agenda1"></script>
 <%- include('partials/app-end') %>
