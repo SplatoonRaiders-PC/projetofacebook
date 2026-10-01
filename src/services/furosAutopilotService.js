@@ -118,8 +118,12 @@ async function atualizarSeAinda(id, statusAtual, dados) {
 
 // ------------------------------------------------------------ aviso no ntfy
 
-/** Publicada e não publicada (erro na escrita, na imagem ou no envio). */
-const AVISAR_NO_CELULAR = new Set(['publicada', 'erro']);
+/**
+ * Só o que falha ANTES de publicar (escrita, imagem, matéria apagada). Publicada
+ * e falha no envio ao Facebook são avisadas para toda matéria, pelo gancho em
+ * AiMatters.update (services/avisoPublicacao.js) — aqui duplicaria.
+ */
+const AVISAR_NO_CELULAR = new Set(['erro']);
 
 /** Não segura o piloto: o aviso sai em segundo plano e falha em silêncio. */
 function avisarNoCelular(itemId) {
@@ -137,6 +141,7 @@ async function nomeDaPagina(pageId) {
 async function enviarAviso(itemId) {
   const item = await db(ITENS).where({ id: itemId }).first();
   if (!item || !AVISAR_NO_CELULAR.has(item.status)) return;
+  if (/^Publicação:/.test(String(item.erro || ''))) return; // já avisado pela matéria
   const cfg = await db(CONFIG).where({ user_id: item.user_id }).first();
   if (!cfg?.ntfy_topico) return;
   const publicada = item.status === 'publicada';
@@ -184,6 +189,7 @@ function formatarConfig(row) {
     pausado_at: row?.pausado_at || null,
     nichos: parseJson(row?.nichos, ['auto']),
     palavras: parseJson(row?.palavras, []),
+    agenda: require('./pilotoAgenda').lerAgenda(row?.agenda),
     canais: parseJson(row?.canais, ['noticias', 'youtube', 'instagram', 'facebook']),
     horas: Number(row?.horas) || 24,
     intervalo_minutos: Number(row?.intervalo_minutos) || 10,
@@ -266,6 +272,8 @@ async function salvarConfig(userId, entrada = {}) {
   const canais = [...new Set((Array.isArray(entrada.canais) ? entrada.canais : []).map(String))]
     .filter((c) => furosService.CANAIS.includes(c));
   const palavras = furosService.palavrasValidas(entrada.palavras);
+  // Sem o campo (tela antiga em cache), a agenda salva continua valendo.
+  const agenda = entrada.agenda === undefined ? undefined : require('./pilotoAgenda').normalizarAgenda(entrada.agenda);
   const intervalo = Number(entrada.intervalo_minutos);
   if (!INTERVALOS.includes(intervalo)) throw erro(400, `Escolha um intervalo de ${INTERVALOS.join(', ')} minutos.`);
   const limiteDia = Math.round(Number(entrada.limite_dia) || 40);
@@ -284,6 +292,7 @@ async function salvarConfig(userId, entrada = {}) {
     ativo,
     nichos: JSON.stringify(nichos.length ? nichos : ['auto']),
     palavras: JSON.stringify(palavras),
+    ...(agenda ? { agenda: JSON.stringify(agenda) } : {}),
     canais: JSON.stringify(canais.length ? canais : furosService.CANAIS),
     horas,
     intervalo_minutos: intervalo,
@@ -375,8 +384,11 @@ async function statusPainel(userId) {
   if (ms > 1000) console.warn(`[furos-auto] painel do user ${userId} levou ${ms} ms`);
 
   const proximoScan = config.ultimo_scan_at ? new Date(new Date(config.ultimo_scan_at).getTime() + SCAN_MS) : null;
+  const pilotoAgenda = require('./pilotoAgenda');
+  const situacaoAgenda = pilotoAgenda.situacao(config.agenda);
   return {
     config,
+    agenda: { ...situacaoAgenda, frase: pilotoAgenda.frase(situacaoAgenda) },
     contagens: Object.fromEntries((linhas || []).map((l) => [l.status, Number(l.n)])),
     publicadasHoje: Number(hoje?.n) || 0,
     proximoScan,
@@ -1142,6 +1154,9 @@ async function agendarProntas(row) {
       const cfg = await db(CONFIG).where({ user_id: userId }).first();
       const proxima = cfg?.proxima_postagem_at ? new Date(cfg.proxima_postagem_at).getTime() : 0;
       const horario = new Date(Math.max(Date.now(), proxima));
+      // Escolhidas pela IA não saem depois que o horário da agenda fecha:
+      // ficam prontas e saem quando a próxima janela abrir.
+      if (item.origem !== 'manual' && row.fimDaJanela && horario >= row.fimDaJanela) break;
 
       await AiMatters.update(item.matter_id, {
         status: 'agendado',
@@ -1229,6 +1244,26 @@ async function limparVelhas(userId) {
     .update({ status: 'descartada', erro: 'Pronta há mais de 24h: ficou velha para publicar.', updated_at: db.fn.now() });
 }
 
+/**
+ * Fora do horário da agenda o piloto age como pausado (só a fila escolhida
+ * pelo editor anda), sem mexer no "Automatizar". Período encerrado desliga.
+ */
+async function aplicarAgenda(row, agora, pilotoAgenda) {
+  if (!row.ativo) return row;
+  const sit = pilotoAgenda.situacao(row.agenda, agora);
+  if (sit.encerrada) {
+    await atualizarConfig(row.user_id, {
+      ativo: false,
+      pausado_at: agora,
+      ultimo_scan_resumo: corta(`Período da agenda terminou (${sit.regra}); piloto desligado.`, 500),
+    });
+    console.info(`[furos-auto] user ${row.user_id}: período da agenda terminou, piloto desligado`);
+    return { ...row, ativo: false };
+  }
+  if (!sit.dentro) return { ...row, ativo: false, foraDoHorario: true };
+  return { ...row, fimDaJanela: sit.fim };
+}
+
 async function tick() {
   if (tickRodando) return;
   tickRodando = true;
@@ -1249,8 +1284,12 @@ async function tick() {
       if (/doesn't exist|no such table/i.test(String(err.message))) return;
       throw err;
     }
-    for (const row of configs) {
+    const agora = new Date();
+    const pilotoAgenda = require('./pilotoAgenda');
+    for (const bruto of configs) {
       try {
+        const row = await aplicarAgenda(bruto, agora, pilotoAgenda);
+        if (bruto.ativo && !row.ativo) usuariosAtivos.delete(Number(bruto.user_id));
         await limparVelhas(row.user_id);
         const ultimo = row.ultimo_scan_at ? new Date(row.ultimo_scan_at).getTime() : 0;
         // Varredura só com o Automatizar ligado.
@@ -1259,7 +1298,7 @@ async function tick() {
         await agendarProntas(row);
         await acompanharAgendadas(row.user_id);
       } catch (err) {
-        console.warn(`[furos-auto] user ${row.user_id}:`, err.message);
+        console.warn(`[furos-auto] user ${bruto.user_id}:`, err.message);
       }
     }
     await preencherImagens();

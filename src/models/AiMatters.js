@@ -493,8 +493,15 @@ const AiMatters = {
     return db(this.table).insert(prepare(data));
   },
 
-  update(id, data) {
-    return db(this.table).where({ id }).update({ ...prepare(data), updated_at: db.fn.now() });
+  async update(id, data) {
+    // Publicada ou falhou ao publicar: aviso no celular (ntfy), uma vez por mudança.
+    const avisar = data?.status === 'publicado' || data?.status === 'erro';
+    const antes = avisar ? await db(this.table).where({ id }).first('status') : null;
+    const alteradas = await db(this.table).where({ id }).update({ ...prepare(data), updated_at: db.fn.now() });
+    if (avisar && antes && antes.status !== data.status) {
+      require('../services/avisoPublicacao').avisar(id, data.status);
+    }
+    return alteradas;
   },
 
   delete(id) {

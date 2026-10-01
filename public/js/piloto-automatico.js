@@ -109,14 +109,17 @@
     const ligado = config.ativo;
     el.luz.className = `inline-block h-3 w-3 rounded-full ${ligado ? 'bg-emerald-400 animate-pulse' : config.existe ? 'bg-amber-400' : 'bg-slate-500'}`;
     const filaManual = Number(s.filaManual) || 0;
+    const agenda = s.agenda || {};
+    const foraDoHorario = ligado && agenda.dentro === false;
     el.titulo.textContent = ligado
-      ? 'Ligado'
+      ? foraDoHorario ? 'Ligado · aguardando o horário' : 'Ligado'
       : filaManual
         ? 'Publicando a fila escolhida'
         : config.existe ? 'Pausado' : 'Ainda não configurado';
     el.sub.textContent = ligado
       ? [
           `Publica a cada ${config.intervalo_minutos} min (até ${config.limite_dia} por dia)`,
+          agenda.modo && agenda.modo !== 'sempre' ? `agenda: ${agenda.regra} — ${agenda.frase}` : null,
           s.modeloNome ? `escreve com ${s.modeloNome}` : null,
           config.proxima_postagem_at && new Date(config.proxima_postagem_at) > new Date()
             ? `próximo horário livre às ${quando(config.proxima_postagem_at)}`
@@ -133,6 +136,7 @@
     el.varrer.hidden = !ligado;
     el.cancelarFila.hidden = !filaManual;
     if (!ligado && filaManual) el.luz.className = 'inline-block h-3 w-3 rounded-full bg-sky-400 animate-pulse';
+    if (foraDoHorario && !filaManual) el.luz.className = 'inline-block h-3 w-3 rounded-full bg-sky-400';
     el.varredura.classList.toggle('hidden', !config.ultimo_scan_resumo);
     el.varredura.textContent = config.ultimo_scan_resumo
       ? `Última varredura${config.ultimo_scan_at ? ` (${quando(config.ultimo_scan_at)})` : ''}: ${config.ultimo_scan_resumo}`

@@ -25,7 +25,89 @@
     chip: $('piloto-chip'),
     curto: $('furos-auto-curto'),
     mais: $('furos-auto-mais'),
+    agendaModo: $('furos-agenda-modo'),
+    agendaInicio: $('furos-agenda-inicio'),
+    agendaFim: $('furos-agenda-fim'),
+    agendaSoHorario: $('furos-agenda-so-horario'),
+    agendaHoraIni: $('furos-agenda-hora-ini'),
+    agendaHoraFim: $('furos-agenda-hora-fim'),
+    agendaDias: $('furos-agenda-dias'),
+    agendaAjuda: $('furos-agenda-ajuda'),
   };
+
+  /* ------------------------------ agenda ------------------------------ */
+
+  const grupoAgenda = (nome) => secao.querySelector(`[data-agenda="${nome}"]`);
+
+  /** "2026-10-01T06:00" no fuso do navegador (o que o campo datetime-local usa). */
+  function paraCampoData(valor) {
+    const d = valor ? new Date(valor) : null;
+    if (!d || Number.isNaN(d.getTime())) return '';
+    return new Date(d.getTime() - d.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
+  }
+
+  function diasMarcados() {
+    return [...(el.agendaDias?.querySelectorAll('[data-dia]') || [])]
+      .filter((b) => b.getAttribute('aria-pressed') === 'true')
+      .map((b) => Number(b.dataset.dia));
+  }
+
+  function mostrarCamposAgenda() {
+    if (!el.agendaModo) return;
+    const modo = el.agendaModo.value;
+    grupoAgenda('periodo').hidden = modo !== 'periodo';
+    grupoAgenda('horas').hidden = !(modo === 'diario' || (modo === 'periodo' && el.agendaSoHorario.checked));
+    grupoAgenda('dias').hidden = modo !== 'diario';
+    if (modo === 'periodo' && !el.agendaInicio.value) {
+      // Sugestão: de agora até hoje às 23:00 (ou amanhã, se já passou).
+      const agora = new Date();
+      const fim = new Date(agora);
+      fim.setHours(23, 0, 0, 0);
+      if (fim <= agora) fim.setDate(fim.getDate() + 1);
+      el.agendaInicio.value = paraCampoData(agora);
+      el.agendaFim.value = paraCampoData(fim);
+    }
+    el.agendaAjuda.textContent = {
+      sempre: '',
+      diario: 'Liga e desliga sozinho todo dia nesse horário (fim antes do início = atravessa a meia-noite). Não precisa desmarcar o Automatizar.',
+      periodo: 'Começa e termina sozinho nas datas escolhidas; no fim do período o Automatizar se desliga.',
+    }[modo];
+  }
+
+  function lerAgendaDoForm() {
+    const modo = el.agendaModo?.value || 'sempre';
+    if (modo === 'sempre') return { modo };
+    const horas = { horario_inicio: el.agendaHoraIni.value, horario_fim: el.agendaHoraFim.value };
+    if (modo === 'diario') return { modo, ...horas, dias: diasMarcados() };
+    const iso = (v) => (v ? new Date(v).toISOString() : null);
+    return {
+      modo,
+      inicio_at: iso(el.agendaInicio.value),
+      fim_at: iso(el.agendaFim.value),
+      ...(el.agendaSoHorario.checked ? horas : {}),
+    };
+  }
+
+  function preencherAgenda(agenda = {}) {
+    if (!el.agendaModo) return;
+    el.agendaModo.value = agenda.modo || 'sempre';
+    if (agenda.horario_inicio) el.agendaHoraIni.value = agenda.horario_inicio;
+    if (agenda.horario_fim) el.agendaHoraFim.value = agenda.horario_fim;
+    el.agendaSoHorario.checked = agenda.modo === 'periodo' && Boolean(agenda.horario_inicio);
+    el.agendaInicio.value = paraCampoData(agenda.inicio_at);
+    el.agendaFim.value = paraCampoData(agenda.fim_at);
+    const dias = Array.isArray(agenda.dias) && agenda.dias.length ? agenda.dias : [0, 1, 2, 3, 4, 5, 6];
+    el.agendaDias.querySelectorAll('[data-dia]').forEach((b) => b.setAttribute('aria-pressed', String(dias.includes(Number(b.dataset.dia)))));
+    mostrarCamposAgenda();
+  }
+
+  el.agendaModo?.addEventListener('change', mostrarCamposAgenda);
+  el.agendaSoHorario?.addEventListener('change', mostrarCamposAgenda);
+  el.agendaDias?.addEventListener('click', (e) => {
+    const botao = e.target.closest('[data-dia]');
+    if (!botao) return;
+    botao.setAttribute('aria-pressed', String(botao.getAttribute('aria-pressed') !== 'true'));
+  });
 
   const ETAPAS = {
     na_fila: ['Na fila', 'is-fila'],
@@ -132,9 +214,11 @@
       const proxima = config.proxima_postagem_at && new Date(config.proxima_postagem_at) > new Date()
         ? `próxima às ${hora(config.proxima_postagem_at)}`
         : 'publica assim que ficar pronta';
+      const agenda = status.agenda || {};
       texto = [
         `Ligado · a cada ${config.intervalo_minutos} min`,
-        proxima,
+        agenda.frase || null,
+        agenda.dentro === false ? null : proxima,
         `${publicadasHoje}/${config.limite_dia} hoje`,
         status.modeloNome ? `escreve com ${status.modeloNome}` : null,
       ].filter(Boolean).join(' · ');
@@ -166,6 +250,7 @@
         el.limite.value = String(config.limite_dia);
       }
       el.foto.checked = config.foto_original_se_falhar !== false;
+      preencherAgenda(config.agenda);
       if (config.facebook_page_id) el.pagina.value = String(config.facebook_page_id);
       // Outro navegador/computador: traz as palavras-chave que o piloto usa.
       const campoPalavras = document.getElementById('furos-palavras');
@@ -185,6 +270,7 @@
       const imagens = (contagens.gerando_imagem || 0);
       const partes = [
         `Ligado · posta a cada ${config.intervalo_minutos} min`,
+        status.agenda && status.agenda.modo !== 'sempre' ? `agenda: ${status.agenda.regra} (${status.agenda.frase})` : null,
         (config.palavras || []).length ? `palavras-chave: ${config.palavras.join(', ')}` : null,
         status.modeloNome ? `escreve com ${status.modeloNome}` : null,
         config.proxima_postagem_at && new Date(config.proxima_postagem_at) > new Date()
@@ -296,6 +382,7 @@
           limite_dia: Number(el.limite.value) || 40,
           facebook_page_id: el.pagina.value || null,
           foto_original_se_falhar: el.foto.checked,
+          agenda: lerAgendaDoForm(),
           modelo: document.getElementById('chat-ai-model')?.dataset.modelo || null,
         }),
       });

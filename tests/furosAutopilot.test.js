@@ -110,7 +110,8 @@ function carregar({ imagem, avaliacoes = null, furos = [], gerarFuro = null, gat
   const mocks = {
     '../config/db': criarDb(tabelas),
     './furosService': {
-      NICHOS: [{ id: 'igreja' }], CANAIS: ['noticias'],
+      NICHOS: [{ id: 'igreja' }], CANAIS: ['noticias'], JANELAS_HORAS: [24],
+      palavrasValidas: (v) => (Array.isArray(v) ? v : []),
       buscarFuros: async (opcoes) => {
         eventos.buscas = [...(eventos.buscas || []), opcoes];
         return { furos };
@@ -733,44 +734,51 @@ test('pausar desfaz os agendamentos da IA que ainda não saíram; cancelar a fil
   assert.equal(ctx.matters.get(escolhidaAgendada.matter_id).status, 'rascunho');
 });
 
-test('ntfy: avisa no celular quando publica e quando não publica, com o motivo', async () => {
+test('ntfy: o piloto avisa a falha antes de publicar (imagem), com o motivo', async () => {
+  const ctx = carregar({ imagem: async () => { throw new Error('ChatGPT fora do ar'); } });
+  Object.assign(ctx.tabelas.furos_autopilot[0], { ntfy_topico: 'viralizeai-teste1', ntfy_publicada: true, ntfy_falha: true, foto_original_se_falhar: false });
+  naFila(ctx.tabelas, 1);
+  await rodar(ctx.service, 25);
+  await esperar(20);
+  const item = ctx.tabelas.furos_autopilot_itens[0];
+  assert.equal(item.status, 'erro');
+  assert.equal(ctx.eventos.avisos.length, 1, 'um aviso só');
+  const aviso = ctx.eventos.avisos[0];
+  assert.equal(aviso.titulo, 'Não publicada · Gospel Geral');
+  assert.equal(aviso.topico, 'viralizeai-teste1');
+  assert.match(aviso.mensagem, /Motivo: Sem imagem: ChatGPT fora do ar/);
+  assert.equal(aviso.tags.join(','), 'x');
+  assert.match(aviso.clique, /^https:\/\/app\.test\/materias-ia\/\d+$/);
+});
+
+test('ntfy: publicada e falha no envio ficam com o aviso geral da matéria (sem duplicar)', async () => {
   const ctx = carregar({ imagem: () => esperar(5) });
-  Object.assign(ctx.tabelas.furos_autopilot[0], { ntfy_topico: 'viralizeai-teste1', ntfy_publicada: true, ntfy_falha: true });
+  Object.assign(ctx.tabelas.furos_autopilot[0], { ntfy_topico: 'viralizeai-teste2', ntfy_publicada: true, ntfy_falha: true });
   naFila(ctx.tabelas, 2);
   await rodar(ctx.service, 20);
-  await esperar(20);
-  const publicada = ctx.eventos.avisos.find((a) => a.titulo.startsWith('Publicada'));
-  assert.ok(publicada, 'aviso de publicada');
-  assert.equal(publicada.titulo, 'Publicada · Gospel Geral');
-  assert.equal(publicada.topico, 'viralizeai-teste1');
-  assert.match(publicada.clique, /^https:\/\/app\.test\/materias-ia\/\d+$/);
-  assert.equal(ctx.eventos.avisos.filter((a) => a.titulo.startsWith('Publicada')).length, 1, 'um aviso por matéria');
-
-  // Falha no envio (agendador do sistema marcou erro): aviso de não publicada.
+  assert.ok(ctx.tabelas.furos_autopilot_itens.some((i) => i.status === 'publicada'));
   const agendada = ctx.tabelas.furos_autopilot_itens.find((i) => i.status === 'agendada');
-  assert.ok(agendada);
   const job = ctx.tabelas.ai_fila_jobs.find((j) => j.matter_id === agendada.matter_id && j.status === 'pendente');
   Object.assign(job, { status: 'erro', erro: 'Token da página expirou' });
   await rodar(ctx.service, 2);
   await esperar(20);
-  const falha = ctx.eventos.avisos.find((a) => a.titulo.startsWith('Não publicada'));
-  assert.ok(falha, 'aviso de não publicada');
-  assert.match(falha.mensagem, /Motivo: Publicação: Token da página expirou/);
-  assert.equal(falha.tags.join(','), 'x');
+  assert.equal(agendada.status, 'erro');
+  assert.equal(ctx.eventos.avisos.length, 0);
 });
 
-test('ntfy: sem tópico ou com o aviso desmarcado, não manda nada', async () => {
-  const ctx = carregar({ imagem: () => esperar(5) });
-  Object.assign(ctx.tabelas.furos_autopilot[0], { ntfy_topico: 'viralizeai-teste2', ntfy_publicada: false, ntfy_falha: true });
-  naFila(ctx.tabelas, 1);
-  await rodar(ctx.service, 15);
+test('ntfy: sem tópico ou com o aviso de falha desmarcado, o piloto não manda nada', async () => {
+  const falhaDesmarcada = carregar({ imagem: async () => { throw new Error('falhou'); } });
+  Object.assign(falhaDesmarcada.tabelas.furos_autopilot[0], { ntfy_topico: 'viralizeai-teste3', ntfy_falha: false, foto_original_se_falhar: false });
+  naFila(falhaDesmarcada.tabelas, 1);
+  await rodar(falhaDesmarcada.service, 25);
   await esperar(20);
-  assert.ok(ctx.tabelas.furos_autopilot_itens.some((i) => i.status === 'publicada'));
-  assert.equal(ctx.eventos.avisos.length, 0);
+  assert.equal(falhaDesmarcada.tabelas.furos_autopilot_itens[0].status, 'erro');
+  assert.equal(falhaDesmarcada.eventos.avisos.length, 0);
 
-  const semTopico = carregar({ imagem: () => esperar(5) });
+  const semTopico = carregar({ imagem: async () => { throw new Error('falhou'); } });
+  Object.assign(semTopico.tabelas.furos_autopilot[0], { foto_original_se_falhar: false });
   naFila(semTopico.tabelas, 1);
-  await rodar(semTopico.service, 15);
+  await rodar(semTopico.service, 25);
   await esperar(20);
   assert.equal(semTopico.eventos.avisos.length, 0);
 });
@@ -788,4 +796,69 @@ test('ntfy: salvar guarda tópico e token sem devolver o token ao navegador', as
   assert.equal(ctx.tabelas.furos_autopilot[0].ntfy_token, 'tk_segredo');
   await ctx.service.testarNtfy(1);
   assert.equal(ctx.eventos.avisos.at(-1).titulo, 'ViralizeAI · teste');
+});
+
+function periodo(deMin, ateMin) {
+  return JSON.stringify({
+    modo: 'periodo',
+    inicio_at: new Date(Date.now() + deMin * 60_000).toISOString(),
+    fim_at: new Date(Date.now() + ateMin * 60_000).toISOString(),
+  });
+}
+
+test('agenda: fora do horário não varre nem escreve as da IA, mas a fila escolhida anda', async () => {
+  const ctx = carregar({ imagem: () => esperar(5) });
+  Object.assign(ctx.tabelas.furos_autopilot[0], { agenda: periodo(120, 300), ultimo_scan_at: null });
+  naFila(ctx.tabelas, 2);
+  await ctx.service.enfileirarEscolhidas(1, {
+    pautas: [{ canal: 'noticias', titulo: 'Prefeitura anuncia mutirão de vacinação no fim de semana', url: 'https://ex.test/v1', score: 30 }],
+    intervalo_minutos: 10,
+    facebook_page_id: 7,
+  });
+  await rodar(ctx.service, 15);
+  assert.equal((ctx.eventos.buscas || []).length, 0, 'não varre fora do horário');
+  const daIa = ctx.tabelas.furos_autopilot_itens.filter((i) => i.origem === 'auto');
+  assert.ok(daIa.every((i) => i.status === 'na_fila'), 'as da IA esperam o horário');
+  const escolhida = ctx.tabelas.furos_autopilot_itens.find((i) => i.origem === 'manual');
+  assert.equal(escolhida.status, 'publicada');
+  assert.equal(ctx.tabelas.furos_autopilot[0].ativo, true, 'o Automatizar continua ligado');
+  const painel = await ctx.service.statusPainel(1);
+  assert.equal(painel.agenda.dentro, false);
+  assert.match(painel.agenda.frase, /fora do horário · começa/);
+});
+
+test('agenda: não agenda as da IA depois do fim da janela', async () => {
+  const ctx = carregar({ imagem: () => esperar(5) });
+  // Janela fecha em 15 min; posta a cada 10 min: cabem 2 (agora e +10).
+  Object.assign(ctx.tabelas.furos_autopilot[0], { agenda: periodo(-60, 15) });
+  naFila(ctx.tabelas, 4);
+  await rodar(ctx.service, 25);
+  const saidas = ctx.tabelas.furos_autopilot_itens.filter((i) => ['agendada', 'publicada'].includes(i.status));
+  assert.equal(saidas.length, 2);
+  assert.ok(ctx.tabelas.furos_autopilot_itens.some((i) => i.status === 'pronta'), 'o resto fica pronto para a próxima janela');
+});
+
+test('agenda: período encerrado desliga o piloto sozinho', async () => {
+  const ctx = carregar({ imagem: () => esperar(5) });
+  Object.assign(ctx.tabelas.furos_autopilot[0], { agenda: periodo(-300, -60) });
+  naFila(ctx.tabelas, 1);
+  await rodar(ctx.service, 3);
+  const cfg = ctx.tabelas.furos_autopilot[0];
+  assert.equal(cfg.ativo, false);
+  assert.ok(cfg.pausado_at);
+  assert.match(cfg.ultimo_scan_resumo, /Período da agenda terminou/);
+  assert.equal(ctx.eventos.publicadas.length, 0);
+});
+
+test('agenda: salvar valida e guarda; sem o campo mantém a agenda salva', async () => {
+  const ctx = carregar({ imagem: () => esperar(5) });
+  const base = { ativo: true, intervalo_minutos: 10, limite_dia: 40, facebook_page_id: 7, nichos: ['auto'], canais: ['noticias'] };
+  await assert.rejects(
+    ctx.service.salvarConfig(1, { ...base, agenda: { modo: 'diario', horario_inicio: '07:00', horario_fim: '07:00' } }),
+    /iguais/
+  );
+  await ctx.service.salvarConfig(1, { ...base, agenda: { modo: 'diario', horario_inicio: '07:00', horario_fim: '23:00' } });
+  assert.equal(JSON.parse(ctx.tabelas.furos_autopilot[0].agenda).horario_fim, '23:00');
+  const s = await ctx.service.salvarConfig(1, base);
+  assert.equal(s.config.agenda.modo, 'diario');
 });

@@ -682,3 +682,70 @@ body.mia-furos-aberto { overflow: hidden; }
 .mia-manual-claude .mia-furos-publicar [hidden] { display: none; }
 .mia-manual-claude .mia-furos-publicar .mia-furos-aviso { flex: 1 1 100%; }
 .mia-manual-claude .mia-furo[data-estado="auto"] .mia-furo-resultado { color: #7dd3fc; }
+
+/* ---------------------------------------------------------------------------
+   Furos do dia — compacto: cabeçalho e filtros menores para a lista de pautas
+   ganhar espaço; depois da busca os filtros recolhem numa linha.
+--------------------------------------------------------------------------- */
+.mia-manual-claude .mia-furos-head { align-items: center; padding: .6rem 1rem .45rem; }
+.mia-manual-claude .mia-furos-eyebrow,
+.mia-manual-claude .mia-furos-sub { display: none; }
+.mia-manual-claude .mia-furos-head h2 { font-size: 1.02rem; }
+.mia-manual-claude .mia-furos-filtros { gap: .45rem; padding: 0 1rem .55rem; }
+.mia-manual-claude .mia-furos-nichos { gap: .3rem; }
+.mia-manual-claude .mia-furos-chip { padding: .22rem .58rem; font-size: .69rem; }
+.mia-manual-claude .mia-furos-canais { gap: .3rem; }
+.mia-manual-claude .mia-furos-palavras input { padding: .32rem .6rem; font-size: .74rem; }
+.mia-manual-claude .mia-furos-linha { gap: .45rem; }
+.mia-manual-claude .mia-furos-linha .mia-chat-seg-btn { padding-top: .28rem; padding-bottom: .28rem; font-size: .7rem; }
+.mia-manual-claude .mia-furos-qtd select { padding: .32rem .5rem; font-size: .72rem; }
+.mia-manual-claude .mia-furos-buscar { padding: .42rem .85rem; font-size: .76rem; }
+@media (min-width: 760px) {
+  .mia-manual-claude .mia-furos-filtros { grid-template-columns: minmax(0, 1fr) auto; align-items: center; column-gap: 1rem; }
+  .mia-manual-claude .mia-furos-filtros > .mia-furos-nichos,
+  .mia-manual-claude .mia-furos-filtros > .mia-furos-linha,
+  .mia-manual-claude .mia-furos-filtros > .mia-furos-filtros-resumo { grid-column: 1 / -1; }
+}
+.mia-manual-claude .mia-furos-filtros.is-recolhido > :not(.mia-furos-filtros-resumo) { display: none; }
+.mia-manual-claude .mia-furos-filtros-resumo { display: flex; align-items: center; gap: .6rem; min-width: 0; }
+.mia-manual-claude .mia-furos-filtros-resumo[hidden] { display: none; }
+.mia-manual-claude .mia-furos-filtros-resumo > span {
+  flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  color: var(--mia-chat-muted); font-size: .72rem;
+}
+.mia-manual-claude .mia-furos-filtros-resumo .mia-furos-sec { flex: none; padding: .28rem .65rem; font-size: .7rem; }
+.mia-manual-claude .mia-furos-status { padding: .35rem 1rem 0; min-height: 0; font-size: .72rem; }
+.mia-manual-claude .mia-furos-lista { gap: .35rem; padding: .45rem 1rem .8rem; min-height: min(24rem, 50dvh); }
+.mia-manual-claude .mia-furo { grid-template-columns: auto 3.6rem minmax(0, 1fr) auto; gap: .6rem; padding: .5rem .6rem; border-radius: .75rem; }
+.mia-manual-claude .mia-furo-thumb { width: 3.6rem; aspect-ratio: 1; }
+.mia-manual-claude .mia-furo-corpo { gap: .2rem; }
+.mia-manual-claude .mia-furo-titulo { font-size: .82rem; line-height: 1.3; }
+.mia-manual-claude .mia-furo-meta { font-size: .67rem; }
+.mia-manual-claude .mia-furo-motivos span { font-size: .62rem; padding: .05rem .4rem; }
+.mia-manual-claude .mia-furo-nota { min-width: 3rem; padding: .25rem .4rem; }
+.mia-manual-claude .mia-furo-nota strong { font-size: .95rem; }
+.mia-manual-claude .mia-furos-auto { padding-top: .45rem; padding-bottom: .45rem; }
+
+/* Agenda do piloto automático */
+.mia-manual-claude .mia-furos-agenda {
+  display: flex; flex-wrap: wrap; align-items: flex-end; gap: .45rem .6rem; flex-basis: 100%;
+  margin: 0; padding: .5rem .6rem; border: 1px solid var(--mia-chat-border); border-radius: .7rem;
+}
+.mia-manual-claude .mia-furos-agenda-grupo { display: contents; }
+.mia-manual-claude .mia-furos-agenda-grupo[hidden],
+.mia-manual-claude .mia-furos-agenda-dias[hidden] { display: none; }
+.mia-manual-claude .mia-furos-agenda label > span { display: block; margin-bottom: .2rem; color: var(--mia-chat-muted); font-size: .68rem; font-weight: 600; }
+.mia-manual-claude .mia-furos-agenda input[type="time"],
+.mia-manual-claude .mia-furos-agenda input[type="datetime-local"],
+.mia-manual-claude .mia-furos-agenda select {
+  padding: .38rem .5rem; border: 1px solid var(--mia-chat-border); border-radius: .55rem;
+  background: rgb(255 255 255 / 3%); color: var(--mia-chat-text); font-size: .74rem; color-scheme: dark;
+}
+.mia-manual-claude .mia-furos-agenda-dias { display: inline-flex; gap: .2rem; }
+.mia-manual-claude .mia-furos-agenda-dias button {
+  width: 1.75rem; height: 1.75rem; border: 1px solid var(--mia-chat-border-strong); border-radius: 999px;
+  background: transparent; color: var(--mia-chat-muted); font-size: .68rem; font-weight: 700; cursor: pointer;
+}
+.mia-manual-claude .mia-furos-agenda-dias button[aria-pressed="true"] { background: var(--mia-chat-accent-soft); border-color: rgb(52 211 153 / 50%); color: #d1fae5; }
+.mia-manual-claude .mia-furos-agenda-ajuda { flex-basis: 100%; color: var(--mia-chat-faint, var(--mia-chat-muted)); font-size: .68rem; line-height: 1.4; }
+.mia-manual-claude .mia-furos-agenda-ajuda:empty { display: none; }

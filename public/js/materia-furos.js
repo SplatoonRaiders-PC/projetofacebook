@@ -35,7 +35,36 @@
     canais: dialog.querySelectorAll('[data-furos-canal]'),
     limite: document.getElementById('furos-limite'),
     palavras: document.getElementById('furos-palavras'),
+    filtros: document.getElementById('furos-filtros'),
+    filtrosResumo: document.getElementById('furos-filtros-resumo'),
+    filtrosTexto: document.getElementById('furos-filtros-texto'),
+    filtrosAbrir: document.getElementById('furos-filtros-abrir'),
   };
+
+  /** Depois da busca, os filtros viram uma linha e a lista ganha espaço. */
+  function recolherFiltros(recolher) {
+    if (!el.filtros || !el.filtrosResumo) return;
+    if (recolher) {
+      const nichos = state.selecionados.has('auto')
+        ? 'Automático'
+        : [...state.selecionados].map((id) => state.nichos.find((n) => n.id === id)?.rotulo || id).join(', ');
+      const palavras = (el.palavras?.value || '').split(',').map((p) => p.trim()).filter(Boolean).map((p) => `“${p}”`);
+      const canais = [...state.canais].map((c) => ROTULO_CANAL[c] || c).join(', ');
+      el.filtrosTexto.textContent = [
+        palavras.length ? palavras.join(', ') : nichos,
+        palavras.length && !state.selecionados.has('auto') ? nichos : null,
+        canais,
+        `${state.horas}h`,
+        `${Number(el.limite?.value) || 25} pautas`,
+      ].filter(Boolean).join(' · ');
+    }
+    el.filtros.classList.toggle('is-recolhido', recolher);
+    el.filtrosResumo.hidden = !recolher;
+  }
+  el.filtrosAbrir?.addEventListener('click', () => {
+    recolherFiltros(false);
+    el.buscar.focus();
+  });
 
   const state = {
     nichos: [],
@@ -449,6 +478,7 @@
       });
       state.furos = data.furos || [];
       renderFuros();
+      recolherFiltros(state.furos.length > 0);
       const nichos = [...(data.palavras || []).map((p) => `“${p}”`), ...(data.nichos || []).map((n) => n.rotulo)].join(', ');
       const porCanal = Object.entries(data.porCanal || {})
         .map(([canal, total]) => `${total} ${canal === 'noticias' ? 'notícias' : ROTULO_CANAL[canal] || canal}`)
