@@ -63,7 +63,12 @@ const NICHOS = Object.freeze([
 
 const NICHOS_PADRAO = ['politica-fe', 'igreja', 'pastores'];
 const MAX_NICHOS = 4;
-const MAX_PALAVRAS = 5;
+const MAX_PALAVRAS = 30;
+// Muitas palavras-chave não viram dezenas de buscas: no Google News elas vão
+// juntas, POR_GRUPO por consulta ("a" OR "b" OR …); no YouTube, que não tem
+// OR confiável, cada busca usa algumas e o rodízio cobre o resto nas próximas.
+const PALAVRAS_POR_GRUPO = 4;
+const PALAVRAS_NO_YOUTUBE = 8;
 
 // Palavras que não identificam assunto ("a", "de", "para"…): ficam fora do
 // filtro da palavra-chave, senão qualquer notícia passaria.
@@ -95,6 +100,29 @@ function palavrasValidas(entrada) {
  * News, portais, YouTube, redes) procuram por ela, e a pauta só conta como do
  * assunto se citar todos os termos dela ("Silas Malafaia" exige os dois).
  */
+/** Grupos de palavras-chave buscados juntos no Google News (operador OR). */
+function gruposDePalavras(nichosDePalavra) {
+  const grupos = [];
+  for (let i = 0; i < nichosDePalavra.length; i += PALAVRAS_POR_GRUPO) {
+    const membros = nichosDePalavra.slice(i, i + PALAVRAS_POR_GRUPO);
+    const termos = membros.map((n) => (n.rotulo.includes(' ') ? `"${n.rotulo}"` : n.rotulo));
+    grupos.push({
+      rotulo: `__palavras-${grupos.length}`,
+      consultas: [termos.join(' OR ')],
+      membros,
+    });
+  }
+  return grupos;
+}
+
+/** Palavras que vão ao YouTube nesta busca: rodízio a cada 10 min. */
+function palavrasDaVezNoYoutube(nichosDePalavra, agora = Date.now()) {
+  if (nichosDePalavra.length <= PALAVRAS_NO_YOUTUBE) return nichosDePalavra;
+  const voltas = Math.ceil(nichosDePalavra.length / PALAVRAS_NO_YOUTUBE);
+  const inicio = (Math.floor(agora / 600_000) % voltas) * PALAVRAS_NO_YOUTUBE;
+  return nichosDePalavra.slice(inicio, inicio + PALAVRAS_NO_YOUTUBE);
+}
+
 function nichoDaPalavra(palavra, indice) {
   const chave = normalizar(palavra);
   const termos = chave.split(' ').filter((t) => t.length >= 3 && !PALAVRAS_VAZIAS.has(t));
@@ -503,22 +531,34 @@ async function buscarFuros({ userId, nichos = [], palavras = [], horas = 24, lim
   const janela = JANELAS_HORAS.includes(Number(horas)) ? Number(horas) : 24;
   const vazio = { topicos: [], totalAnalisado: 0, totalOcultado: 0 };
   const { buscarNosPortais } = require('./portaisNichoService');
+  // Busca no Google: palavras-chave em grupos (OR) + nichos fixos.
+  const nichosDePalavra = selecionados.filter((n) => n.palavraChave);
+  const grupos = gruposDePalavras(nichosDePalavra);
+  const grupoPorRotulo = new Map(grupos.map((g) => [g.rotulo, g]));
+  const temasDeBusca = [
+    ...grupos.map(({ rotulo, consultas }) => ({ rotulo, consultas })),
+    ...doNichoFixo.map((n) => ({ rotulo: n.rotulo, consultas: n.consultas })),
+  ];
+  const consultasSociais = [
+    ...palavrasDaVezNoYoutube(nichosDePalavra).map((n) => ({ consulta: n.rotulo, nicho: n.rotulo })),
+    ...doNichoFixo.flatMap((n) => n.consultas.slice(0, 5).map((consulta) => ({ consulta, nicho: n.rotulo }))),
+  ];
   const [resultado, indiceDireto, sociais, portais] = await Promise.all([
     querNoticias
       ? radarPorTemas(
-          selecionados.map((n) => ({ rotulo: n.rotulo, consultas: n.consultas })),
+          temasDeBusca,
           // Seis buscas por nicho e sem reapurar todas as candidatas: só as que
           // vão aparecer ganham link direto e foto (completarLinkEImagem).
           { horas: janela, limite: Math.max(limite * 2, 30), userId, consultasPorTema: 6, apurar: false }
         )
       : vazio,
     querNoticias && completar
-      ? indiceDeLinksDiretos(selecionados.flatMap((n) => n.consultas.slice(0, 2)), janela).catch(() => [])
+      ? indiceDeLinksDiretos(temasDeBusca.flatMap((t) => t.consultas.slice(0, 2)), janela).catch(() => [])
       : [],
     buscarFurosSociais({
       userId,
       canais: listaCanais.filter((c) => c !== 'noticias'),
-      consultas: selecionados.flatMap((n) => n.consultas.slice(0, 5).map((consulta) => ({ consulta, nicho: n.rotulo }))),
+      consultas: consultasSociais,
       horas: janela,
       limite,
       pontuarBomba,
@@ -535,13 +575,21 @@ async function buscarFuros({ userId, nichos = [], palavras = [], horas = 24, lim
 
   const agora = Date.now();
   const nichoPorRotulo = new Map(selecionados.map((n) => [n.rotulo, n]));
+  // Notícia de um grupo de palavras: fica com a palavra que ela cita.
+  const temaDaNoticia = (t) => {
+    const grupo = grupoPorRotulo.get(t.tema);
+    if (!grupo) return { nicho: t.tema || null, noNicho: pertenceAoNicho(t, nichoPorRotulo.get(t.tema)) };
+    const cita = grupo.membros.find((n) => pertenceAoNicho(t, n));
+    return { nicho: (cita || grupo.membros[0]).rotulo, noNicho: Boolean(cita) };
+  };
   const doGoogle = (resultado.topicos || [])
     .filter((t) => t && t.titulo && (t.link || t.url))
     .map((t) => {
       const { score, motivos } = pontuarBomba(t, agora);
+      const tema = temaDaNoticia(t);
       return {
         canal: 'noticias',
-        noNicho: pertenceAoNicho(t, nichoPorRotulo.get(t.tema)),
+        noNicho: tema.noNicho,
         titulo: String(t.titulo).replace(/\s+/g, ' ').trim().slice(0, 300),
         url: String(t.link || t.url).trim().slice(0, 1000),
         veiculo: String(t.veiculo || t.fonte || 'Web').trim().slice(0, 120),
@@ -550,7 +598,7 @@ async function buscarFuros({ userId, nichos = [], palavras = [], horas = 24, lim
         imagem: /^https?:\/\//i.test(String(t.imagemFonte || t.imagem || '')) ? String(t.imagemFonte || t.imagem) : null,
         data: t.data || null,
         dataTimestamp: timestampDoItem(t),
-        nicho: t.tema || null,
+        nicho: tema.nicho,
         score,
         motivos,
       };
@@ -781,6 +829,8 @@ module.exports = {
   listarNichos,
   escolherNichosAutomaticos,
   palavrasValidas,
+  gruposDePalavras,
+  palavrasDaVezNoYoutube,
   pontuarBomba,
   buscarFuros,
   gerarFuro,

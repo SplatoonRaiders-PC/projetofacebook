@@ -1,6 +1,6 @@
 <%- include('partials/app-start') %>
   <link rel="stylesheet" href="/css/materia-chat.css?v=20260902tomTitulosClaude1" />
-  <link rel="stylesheet" href="/css/materia-manual.css?v=20260930agenda2" />
+  <link rel="stylesheet" href="/css/materia-manual.css?v=20261001chips1" />
   <link rel="stylesheet" href="/css/feed-sugerido.css?v=20260927feed4" />
 
   <main class="mia-chat mia-manual-claude" data-recolher-menu>
@@ -387,10 +387,12 @@
             <div class="mia-furos-nichos" id="furos-nichos" role="group" aria-label="Nichos"></div>
             <label class="mia-furos-palavras">
               <span class="mia-furos-canais-rotulo">Palavra-chave</span>
-              <input type="search" id="furos-palavras" maxlength="200" autocomplete="off" spellcheck="false"
-                placeholder="Opcional. Ex.: Malafaia, Lagoinha, André Valadão (separe por vírgula)"
-                title="Até 5 palavras-chave, separadas por vírgula. Com “Automático”, a busca fica só nelas; com nichos marcados, procura nos dois." />
+              <input type="text" id="furos-palavra-nova" maxlength="2000" autocomplete="off" spellcheck="false" enterkeyhint="done"
+                placeholder="Digite e aperte vírgula ou Enter (pode colar uma lista)"
+                title="Até 30 palavras-chave. Com “Automático”, a busca fica só nelas; com nichos marcados, procura nos dois." />
+              <input type="hidden" id="furos-palavras" />
             </label>
+            <div class="mia-furos-palavras-lista" id="furos-palavras-lista" role="list" aria-label="Palavras-chave" hidden></div>
             <div class="mia-furos-canais" role="group" aria-label="Onde procurar">
               <span class="mia-furos-canais-rotulo">Procurar em</span>
               <button type="button" class="mia-furos-chip is-active" data-furos-canal="noticias" aria-pressed="true" title="Google News + portais do nicho lidos direto: Guiame, O Fuxico Gospel, Gospel Prime, Gospel Mais, Folha Gospel, Pleno News, Gazeta do Povo, Revista Oeste, Poder360, CNN Brasil, Metrópoles e outros">Notícias</button>
@@ -738,7 +740,7 @@
   </script>
   <script src="/js/materia-chat.js?v=20260928feedModelo1"></script>
   <script src="/js/materia-chat-extras.js?v=20260930radarImg2"></script>
-  <script src="/js/materia-furos.js?v=20260930agenda2"></script>
-  <script src="/js/materia-furos-auto.js?v=20260930agenda2"></script>
+  <script src="/js/materia-furos.js?v=20261001chips1"></script>
+  <script src="/js/materia-furos-auto.js?v=20261001chips1"></script>
   <script src="/js/feed-sugerido.js?v=20260928feedModelo1"></script>
 <%- include('partials/app-end') %>

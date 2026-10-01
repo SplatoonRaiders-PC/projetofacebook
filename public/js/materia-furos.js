@@ -35,6 +35,8 @@
     canais: dialog.querySelectorAll('[data-furos-canal]'),
     limite: document.getElementById('furos-limite'),
     palavras: document.getElementById('furos-palavras'),
+    palavraNova: document.getElementById('furos-palavra-nova'),
+    palavrasLista: document.getElementById('furos-palavras-lista'),
     filtros: document.getElementById('furos-filtros'),
     filtrosResumo: document.getElementById('furos-filtros-resumo'),
     filtrosTexto: document.getElementById('furos-filtros-texto'),
@@ -48,7 +50,10 @@
       const nichos = state.selecionados.has('auto')
         ? 'Automático'
         : [...state.selecionados].map((id) => state.nichos.find((n) => n.id === id)?.rotulo || id).join(', ');
-      const palavras = (el.palavras?.value || '').split(',').map((p) => p.trim()).filter(Boolean).map((p) => `“${p}”`);
+      const lista = state.palavras || [];
+      const palavras = lista.length > 3
+        ? [`${lista.length} palavras-chave`]
+        : lista.map((p) => `“${p}”`);
       const canais = [...state.canais].map((c) => ROTULO_CANAL[c] || c).join(', ');
       el.filtrosTexto.textContent = [
         palavras.length ? palavras.join(', ') : nichos,
@@ -230,15 +235,148 @@
     });
   });
 
-  // Palavras-chave: ficam salvas (o piloto automático também usa) e Enter busca.
-  const palavrasSalvas = lerSalvo(PALAVRAS_KEY);
-  if (el.palavras && typeof palavrasSalvas === 'string') el.palavras.value = palavrasSalvas;
-  el.palavras?.addEventListener('input', () => salvar(PALAVRAS_KEY, el.palavras.value.trim()));
-  el.palavras?.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      buscar();
+  /* ----------------------------- palavras-chave ----------------------------- */
+  // Etiquetas: vírgula ou Enter adiciona; colar uma lista adiciona todas;
+  // clique na palavra para editar; × exclui. Ficam salvas no navegador e o
+  // piloto automático lê o campo oculto #furos-palavras.
+  const MAX_PALAVRAS = 30;
+  const chavePalavra = (p) => p.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+  const limparPalavra = (p) => String(p || '').replace(/["“”]/g, '').replace(/\s+/g, ' ').trim().slice(0, 60);
+  state.palavras = [];
+
+  function definirPalavras(lista, { avisar = true } = {}) {
+    const vistas = new Set();
+    const finais = [];
+    let sobrou = 0;
+    for (const bruta of lista) {
+      const palavra = limparPalavra(bruta);
+      const chave = chavePalavra(palavra);
+      if (chave.length < 2 || vistas.has(chave)) continue;
+      if (finais.length >= MAX_PALAVRAS) { sobrou += 1; continue; }
+      vistas.add(chave);
+      finais.push(palavra);
     }
+    state.palavras = finais;
+    if (el.palavras) el.palavras.value = finais.join(', ');
+    salvar(PALAVRAS_KEY, finais);
+    renderPalavras();
+    if (sobrou && avisar) setStatus(`Máximo de ${MAX_PALAVRAS} palavras-chave: ${sobrou} ficaram de fora.`, 'aviso');
+  }
+
+  /** Adiciona o que foi digitado/colado (separado por vírgula, ";" ou linha). */
+  function adicionarPalavras(texto) {
+    const novas = String(texto || '').split(/[,;\n]/).map(limparPalavra).filter(Boolean);
+    if (novas.length) definirPalavras([...state.palavras, ...novas]);
+  }
+
+  function editarPalavra(indice, etiqueta) {
+    const original = state.palavras[indice];
+    const campo = document.createElement('input');
+    campo.type = 'text';
+    campo.className = 'mia-furos-tag-editar';
+    campo.value = original;
+    campo.maxLength = 60;
+    campo.setAttribute('aria-label', `Editar ${original}`);
+    let feito = false;
+    const concluir = (salvarEdicao) => {
+      if (feito) return;
+      feito = true;
+      const lista = [...state.palavras];
+      const novo = limparPalavra(campo.value);
+      if (!salvarEdicao) renderPalavras();
+      else if (!novo) definirPalavras(lista.filter((_, i) => i !== indice));
+      else {
+        // "a, b" na edição vira duas palavras no lugar da antiga.
+        lista.splice(indice, 1, ...campo.value.split(/[,;]/).map(limparPalavra).filter(Boolean));
+        definirPalavras(lista);
+      }
+    };
+    campo.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); concluir(true); el.palavraNova?.focus(); }
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); concluir(false); }
+    });
+    campo.addEventListener('blur', () => concluir(true));
+    etiqueta.replaceWith(campo);
+    campo.focus();
+    campo.select();
+  }
+
+  function renderPalavras() {
+    if (!el.palavrasLista) return;
+    el.palavrasLista.replaceChildren();
+    el.palavrasLista.hidden = !state.palavras.length;
+    state.palavras.forEach((palavra, indice) => {
+      const etiqueta = document.createElement('span');
+      etiqueta.className = 'mia-furos-tag';
+      etiqueta.setAttribute('role', 'listitem');
+      const texto = document.createElement('button');
+      texto.type = 'button';
+      texto.className = 'mia-furos-tag-texto';
+      texto.textContent = palavra;
+      texto.title = `${palavra} — clique para editar`;
+      texto.addEventListener('click', () => editarPalavra(indice, etiqueta));
+      const excluir = document.createElement('button');
+      excluir.type = 'button';
+      excluir.className = 'mia-furos-tag-x';
+      excluir.textContent = '×';
+      excluir.title = `Excluir ${palavra}`;
+      excluir.setAttribute('aria-label', `Excluir ${palavra}`);
+      excluir.addEventListener('click', () => {
+        definirPalavras(state.palavras.filter((_, i) => i !== indice));
+        el.palavraNova?.focus();
+      });
+      etiqueta.append(texto, excluir);
+      el.palavrasLista.append(etiqueta);
+    });
+    if (state.palavras.length) {
+      const acoes = document.createElement('span');
+      acoes.className = 'mia-furos-palavras-acoes';
+      acoes.append(`${state.palavras.length}/${MAX_PALAVRAS}`);
+      if (state.palavras.length > 1) {
+        const limpar = document.createElement('button');
+        limpar.type = 'button';
+        limpar.textContent = 'Limpar todas';
+        limpar.addEventListener('click', () => {
+          if (confirm(`Excluir as ${state.palavras.length} palavras-chave?`)) definirPalavras([]);
+        });
+        acoes.append(limpar);
+      }
+      el.palavrasLista.append(acoes);
+    }
+  }
+
+  /** Palavra digitada e ainda sem vírgula entra antes de buscar/salvar. */
+  function confirmarPalavraDigitada() {
+    if (el.palavraNova?.value.trim()) {
+      adicionarPalavras(el.palavraNova.value);
+      el.palavraNova.value = '';
+    }
+  }
+
+  // Salvas antes como texto ("a, b") ou como lista.
+  const palavrasSalvas = lerSalvo(PALAVRAS_KEY);
+  definirPalavras(
+    Array.isArray(palavrasSalvas) ? palavrasSalvas : String(palavrasSalvas || '').split(/[,;\n]/),
+    { avisar: false }
+  );
+  el.palavraNova?.addEventListener('input', () => {
+    const valor = el.palavraNova.value;
+    if (!/[,;\n]/.test(valor)) return;
+    const partes = valor.split(/[,;\n]/);
+    const resto = partes.pop();
+    adicionarPalavras(partes.join(','));
+    el.palavraNova.value = resto.trimStart();
+  });
+  el.palavraNova?.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    if (el.palavraNova.value.trim()) confirmarPalavraDigitada();
+    else buscar();
+  });
+  el.palavraNova?.addEventListener('blur', confirmarPalavraDigitada);
+  // O painel do piloto traz as palavras salvas no servidor (outro computador).
+  document.addEventListener('furos:palavras-definir', (e) => {
+    if (!state.palavras.length && Array.isArray(e.detail) && e.detail.length) definirPalavras(e.detail, { avisar: false });
   });
 
   const limiteSalvo = Number(lerSalvo(LIMITE_KEY));
@@ -452,6 +590,7 @@
 
   async function buscar() {
     if (state.buscando || state.gerando) return;
+    confirmarPalavraDigitada();
     state.buscando = true;
     state.furos = [];
     state.marcados.clear();
@@ -470,7 +609,7 @@
         method: 'POST',
         body: JSON.stringify({
           nichos: [...state.selecionados],
-          palavras: el.palavras?.value.trim() || '',
+          palavras: state.palavras,
           horas: state.horas,
           limite: Number(el.limite?.value) || 25,
           canais: [...state.canais],

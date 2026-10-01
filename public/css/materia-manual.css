@@ -749,3 +749,34 @@ body.mia-furos-aberto { overflow: hidden; }
 .mia-manual-claude .mia-furos-agenda-dias button[aria-pressed="true"] { background: var(--mia-chat-accent-soft); border-color: rgb(52 211 153 / 50%); color: #d1fae5; }
 .mia-manual-claude .mia-furos-agenda-ajuda { flex-basis: 100%; color: var(--mia-chat-faint, var(--mia-chat-muted)); font-size: .68rem; line-height: 1.4; }
 .mia-manual-claude .mia-furos-agenda-ajuda:empty { display: none; }
+
+/* Palavras-chave em etiquetas: clique para editar, × para excluir */
+.mia-manual-claude .mia-furos-palavras-lista {
+  display: flex; flex-wrap: wrap; align-items: center; gap: .3rem;
+  max-height: 4.75rem; overflow-y: auto; scrollbar-width: thin; scrollbar-color: rgb(255 255 255 / 12%) transparent;
+}
+.mia-manual-claude .mia-furos-palavras-lista[hidden] { display: none; }
+@media (min-width: 760px) {
+  .mia-manual-claude .mia-furos-filtros > .mia-furos-palavras-lista { grid-column: 1 / -1; }
+}
+.mia-manual-claude .mia-furos-tag {
+  display: inline-flex; align-items: center; max-width: 100%; border: 1px solid rgb(251 146 60 / 40%); border-radius: 999px;
+  background: rgb(251 146 60 / 10%); color: #ffedd5; font-size: .69rem; line-height: 1;
+}
+.mia-manual-claude .mia-furos-tag-texto {
+  max-width: 16rem; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  padding: .26rem .1rem .26rem .55rem; border: 0; background: none; color: inherit; font: inherit; cursor: text;
+}
+.mia-manual-claude .mia-furos-tag-texto:hover { text-decoration: underline; text-underline-offset: 2px; }
+.mia-manual-claude .mia-furos-tag-x {
+  display: grid; place-items: center; width: 1.25rem; height: 1.25rem; margin-right: .1rem; border: 0; border-radius: 999px;
+  background: none; color: #fdba74; font-size: .85rem; line-height: 1; cursor: pointer;
+}
+.mia-manual-claude .mia-furos-tag-x:hover { background: rgb(244 63 94 / 25%); color: #fff; }
+.mia-manual-claude .mia-furos-tag-editar {
+  width: clamp(6rem, 12rem, 60vw); padding: .22rem .55rem; border: 1px solid rgb(251 146 60 / 70%); border-radius: 999px;
+  background: #1a1d22; color: var(--mia-chat-text); font-size: .69rem; outline: none;
+}
+.mia-manual-claude .mia-furos-palavras-acoes { display: inline-flex; align-items: center; gap: .5rem; margin-left: .2rem; font-size: .66rem; color: var(--mia-chat-faint, var(--mia-chat-muted)); }
+.mia-manual-claude .mia-furos-palavras-acoes button { border: 0; background: none; color: var(--mia-chat-muted); font-size: .66rem; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+.mia-manual-claude .mia-furos-palavras-acoes button:hover { color: #fda4af; }

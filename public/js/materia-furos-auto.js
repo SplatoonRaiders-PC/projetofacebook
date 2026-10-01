@@ -253,9 +253,8 @@
       preencherAgenda(config.agenda);
       if (config.facebook_page_id) el.pagina.value = String(config.facebook_page_id);
       // Outro navegador/computador: traz as palavras-chave que o piloto usa.
-      const campoPalavras = document.getElementById('furos-palavras');
-      if (campoPalavras && !campoPalavras.value.trim() && (config.palavras || []).length) {
-        campoPalavras.value = config.palavras.join(', ');
+      if ((config.palavras || []).length) {
+        document.dispatchEvent(new CustomEvent('furos:palavras-definir', { detail: config.palavras }));
       }
     }
     el.escanear.hidden = !config.ativo;
@@ -271,7 +270,9 @@
       const partes = [
         `Ligado · posta a cada ${config.intervalo_minutos} min`,
         status.agenda && status.agenda.modo !== 'sempre' ? `agenda: ${status.agenda.regra} (${status.agenda.frase})` : null,
-        (config.palavras || []).length ? `palavras-chave: ${config.palavras.join(', ')}` : null,
+        (config.palavras || []).length
+          ? `palavras-chave: ${config.palavras.length > 4 ? `${config.palavras.slice(0, 4).join(', ')} +${config.palavras.length - 4}` : config.palavras.join(', ')}`
+          : null,
         status.modeloNome ? `escreve com ${status.modeloNome}` : null,
         config.proxima_postagem_at && new Date(config.proxima_postagem_at) > new Date()
           ? `próxima postagem às ${hora(config.proxima_postagem_at)}`
