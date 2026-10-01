@@ -160,6 +160,20 @@ async function excluir(req, res, next) {
   }
 }
 
+/** Exclui de uma vez as conversas marcadas na sidebar. */
+async function excluirVarias(req, res, next) {
+  try {
+    const resultado = await chatService.excluirConversas({
+      userId: req.session.userId,
+      chatIds: req.body?.ids,
+    });
+    return res.json({ ok: true, ...resultado });
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    return next(err);
+  }
+}
+
 /** Editar um pedido: apaga a mensagem e tudo que veio depois dela. */
 async function apagarDaMensagem(req, res, next) {
   try {
@@ -421,6 +435,7 @@ module.exports = {
   renomear,
   fixar,
   excluir,
+  excluirVarias,
   apagarDaMensagem,
   enviar,
   salvarMateria,

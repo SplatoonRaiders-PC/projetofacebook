@@ -9,6 +9,10 @@
   const el = {
     lista: document.getElementById('chat-lista'),
     busca: document.getElementById('chat-busca'),
+    selecionar: document.getElementById('chat-selecionar'),
+    selecao: document.getElementById('chat-selecao'),
+    selecaoTodas: document.getElementById('chat-selecao-todas'),
+    selecaoExcluir: document.getElementById('chat-selecao-excluir'),
     nova: document.getElementById('chat-nova'),
     novaTop: document.getElementById('chat-nova-top'),
     titulo: document.getElementById('chat-titulo'),
@@ -47,6 +51,9 @@
     iniciado: false,
     chatId: null,
     conversas: [],
+    // Modo "Selecionar" da sidebar: ids marcados para excluir de uma vez.
+    selecionando: false,
+    selecionadas: new Set(),
     // O link enviado já é a fonte. Pesquisa extra só roda quando o editor optar.
     pesquisarWeb: false,
     transcreverVideo: true,
@@ -349,13 +356,62 @@
     }
   }
 
+  /** Conversas que aparecem na lista agora (respeita a busca). */
+  function conversasVisiveis() {
+    const filtro = String(el.busca?.value || '').trim().toLowerCase();
+    return state.conversas.filter(
+      (c) => !filtro || String(c.titulo || '').toLowerCase().includes(filtro)
+    );
+  }
+
+  function atualizarBarraSelecao() {
+    if (!el.selecao || !el.selecionar || !el.selecaoTodas || !el.selecaoExcluir) return;
+    const total = state.selecionadas.size;
+    const visiveis = conversasVisiveis();
+    const todasMarcadas = visiveis.length > 0 && visiveis.every((c) => state.selecionadas.has(Number(c.id)));
+    el.selecao.classList.toggle('hidden', !state.selecionando);
+    el.selecionar.textContent = state.selecionando ? 'Cancelar' : 'Selecionar';
+    el.selecionar.setAttribute('aria-pressed', String(state.selecionando));
+    el.selecaoTodas.textContent = todasMarcadas ? 'Desmarcar todas' : 'Selecionar todas';
+    el.selecaoExcluir.textContent = total ? `Excluir (${total})` : 'Excluir';
+    el.selecaoExcluir.disabled = !total;
+  }
+
+  function alternarModoSelecao(ativo) {
+    state.selecionando = ativo;
+    state.selecionadas.clear();
+    renderConversas();
+  }
+
+  async function excluirSelecionadas() {
+    const ids = [...state.selecionadas];
+    if (!ids.length) return;
+    const frase = ids.length === 1
+      ? 'Excluir a conversa selecionada e todo o histórico dela?'
+      : `Excluir as ${ids.length} conversas selecionadas e todo o histórico delas?`;
+    if (!confirm(frase)) return;
+    el.selecaoExcluir.disabled = true;
+    try {
+      await api(`${API}/conversas/excluir`, { method: 'POST', body: JSON.stringify({ ids }) });
+      if (ids.includes(Number(state.chatId))) novaConversa();
+      state.selecionando = false;
+      state.selecionadas.clear();
+      await carregarConversas();
+    } catch (err) {
+      alert(err.message);
+      atualizarBarraSelecao();
+    }
+  }
+
   function renderConversas() {
     const filtro = String(el.busca?.value || '').trim().toLowerCase();
     el.lista.replaceChildren();
 
-    const itens = state.conversas.filter(
-      (c) => !filtro || String(c.titulo || '').toLowerCase().includes(filtro)
-    );
+    const itens = conversasVisiveis();
+    // Conversa que saiu da lista (excluída em outra aba) não fica marcada.
+    const existentes = new Set(state.conversas.map((c) => Number(c.id)));
+    for (const id of state.selecionadas) if (!existentes.has(id)) state.selecionadas.delete(id);
+    atualizarBarraSelecao();
 
     if (!itens.length) {
       const p = document.createElement('p');
@@ -375,6 +431,28 @@
       btn.className = 'mia-chat-conv-btn';
       btn.textContent = c.titulo || 'Nova conversa';
       btn.title = c.titulo || 'Nova conversa';
+
+      if (state.selecionando) {
+        const id = Number(c.id);
+        const marcar = document.createElement('input');
+        marcar.type = 'checkbox';
+        marcar.className = 'mia-chat-conv-check';
+        marcar.checked = state.selecionadas.has(id);
+        marcar.setAttribute('aria-label', `Selecionar ${c.titulo || 'Nova conversa'}`);
+        const alternar = () => {
+          if (state.selecionadas.has(id)) state.selecionadas.delete(id);
+          else state.selecionadas.add(id);
+          marcar.checked = state.selecionadas.has(id);
+          linha.classList.toggle('is-selected', marcar.checked);
+          atualizarBarraSelecao();
+        };
+        marcar.addEventListener('change', alternar);
+        btn.addEventListener('click', alternar);
+        linha.classList.toggle('is-selected', marcar.checked);
+        linha.append(marcar, btn);
+        el.lista.appendChild(linha);
+        continue;
+      }
       btn.addEventListener('click', () => abrirConversa(c.id));
 
       const acoes = document.createElement('div');
@@ -3538,6 +3616,14 @@
     if (!isMobileDrawer()) closeDrawer();
   });
   el.busca?.addEventListener('input', renderConversas);
+  el.selecionar?.addEventListener('click', () => alternarModoSelecao(!state.selecionando));
+  el.selecaoTodas?.addEventListener('click', () => {
+    const visiveis = conversasVisiveis().map((c) => Number(c.id));
+    const todasMarcadas = visiveis.length > 0 && visiveis.every((id) => state.selecionadas.has(id));
+    visiveis.forEach((id) => (todasMarcadas ? state.selecionadas.delete(id) : state.selecionadas.add(id)));
+    renderConversas();
+  });
+  el.selecaoExcluir?.addEventListener('click', excluirSelecionadas);
   el.toggleWeb?.addEventListener('click', () => {
     if (state.tipoConversa === 'livre') return;
     state.pesquisarWeb = !state.pesquisarWeb;

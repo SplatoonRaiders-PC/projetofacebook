@@ -445,7 +445,8 @@ function mesclarPortais(pontuados, itensPortal, selecionados, agora) {
     const texto = item.especializado ? item : { titulo: item.titulo };
     const nicho =
       selecionados.find((n) => pertenceAoNicho(texto, n)) ||
-      (item.especializado
+      // Portal internacional não tem essa folga: sem citar o nicho, fica de fora.
+      (item.especializado && !item.internacional
         ? selecionados.find((n) => NICHOS_GENERICOS_DE_PORTAL.includes(n.id) && item.portalNichos.includes(n.id))
         : null);
     if (!nicho) continue;

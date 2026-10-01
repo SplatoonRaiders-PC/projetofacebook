@@ -14,7 +14,7 @@ const axios = require('axios');
 const CACHE_MS = 10 * 60 * 1000;
 const ERRO_CACHE_MS = 3 * 60 * 1000;
 const TIMEOUT_MS = 10_000;
-const LEITURAS_SIMULTANEAS = 4;
+const LEITURAS_SIMULTANEAS = 8;
 const MAX_BYTES = 3 * 1024 * 1024;
 const MAX_ITENS_POR_PORTAL = 40;
 const USER_AGENT =
@@ -26,6 +26,10 @@ const USER_AGENT =
  * `tipo`: 'rss' (feed) ou 'wp' (API do WordPress, para quem bloqueia o feed).
  * `especializado`: portal só do nicho gospel. As notícias dele valem para o
  * nicho mesmo sem a palavra-chave no título; nos portais gerais, precisam citar.
+ * `internacional`: portal cristão em outro idioma. Só entra a notícia que
+ * citar o nicho ou a palavra-chave (título ou resumo); sem isso a lista se
+ * encheria de manchetes em inglês.
+ * `base`: rota da API do WordPress quando as notícias não são "posts".
  * Portal que bloqueia robôs (ex.: Comunhão responde 403) fica de fora.
  */
 const PORTAIS = Object.freeze([
@@ -42,6 +46,37 @@ const PORTAIS = Object.freeze([
   { id: 'cnnbrasil', nome: 'CNN Brasil', tipo: 'rss', url: 'https://www.cnnbrasil.com.br/feed/', nichos: ['politica', 'policia'] },
   { id: 'metropoles', nome: 'Metrópoles', tipo: 'rss', url: 'https://www.metropoles.com/feed', nichos: ['politica', 'policia'] },
   { id: 'terrabrasil', nome: 'Terra Brasil Notícias', tipo: 'rss', url: 'https://www.terrabrasilnoticias.com/feed/', nichos: ['politica', 'politica-fe'] },
+  // Portais cristãos brasileiros
+  { id: 'portasabertas', nome: 'Portas Abertas', tipo: 'wp', url: 'https://portasabertas.org.br', base: 'noticias', especializado: true, nichos: ['israel', 'igreja'] },
+  { id: 'adventistas', nome: 'Notícias Adventistas', tipo: 'rss', url: 'https://noticias.adventistas.org/pt/feed/', especializado: true, nichos: ['igreja', 'pastores'] },
+  { id: 'cpadnews', nome: 'CPAD News', tipo: 'rss', url: 'https://www.cpadnews.com.br/feed/', especializado: true, nichos: ['igreja', 'pastores', 'gospel', 'israel'] },
+  { id: 'goodprime', nome: 'Good Prime', tipo: 'rss', url: 'https://goodprime.co/feed/', especializado: true, nichos: ['igreja', 'pastores'] },
+  { id: 'aliancaevangelica', nome: 'Aliança Evangélica', tipo: 'rss', url: 'https://aliancaevangelica.org.br/feed/', especializado: true, nichos: ['igreja', 'politica-fe'] },
+  { id: 'comoouvirao', nome: 'Como Ouvirão', tipo: 'rss', url: 'https://comoouvirao.com.br/feed/', especializado: true, nichos: ['igreja'] },
+  { id: 'hinologia', nome: 'Hinologia Cristã', tipo: 'rss', url: 'http://www.hinologia.org/feed/', especializado: true, nichos: ['gospel', 'igreja'] },
+  { id: 'mariosergio', nome: 'Mario Sérgio História', tipo: 'rss', url: 'https://mariosergiohistoria.blogspot.com/feeds/posts/default?alt=rss', especializado: true, nichos: ['igreja', 'pastores'] },
+  // Portais gerais brasileiros: a notícia precisa citar o nicho no título
+  { id: 'g1', nome: 'g1', tipo: 'rss', url: 'https://g1.globo.com/rss/g1/', nichos: ['politica', 'policia'] },
+  { id: 'g1tocantins', nome: 'g1 Tocantins', tipo: 'rss', url: 'https://g1.globo.com/rss/g1/to/tocantins/', nichos: ['politica', 'policia'] },
+  { id: 'revistaforum', nome: 'Revista Fórum', tipo: 'rss', url: 'https://revistaforum.com.br/feed/', nichos: ['politica', 'politica-fe'] },
+  { id: 'claudiodantas', nome: 'Claudio Dantas', tipo: 'rss', url: 'https://claudiodantas.com.br/feed/', nichos: ['politica', 'politica-fe'] },
+  { id: 'brasilparalelo', nome: 'Brasil Paralelo', tipo: 'rss', url: 'https://www.brasilparalelo.com.br/noticias/rss.xml', nichos: ['politica', 'politica-fe'] },
+  { id: 'istoe', nome: 'IstoÉ', tipo: 'rss', url: 'https://istoe.com.br/feed/', nichos: ['politica', 'policia'] },
+  { id: 'sonoticiaboa', nome: 'Só Notícia Boa', tipo: 'rss', url: 'https://www.sonoticiaboa.com.br/feed/', nichos: ['igreja', 'pastores', 'catolicos'] },
+  // Portais cristãos internacionais
+  { id: 'christiandaily', nome: 'Christian Daily', tipo: 'rss', url: 'https://www.christiandaily.com/rss.xml', especializado: true, internacional: true, nichos: ['israel', 'igreja', 'pastores', 'politica-fe'] },
+  { id: 'christianpost', nome: 'The Christian Post', tipo: 'rss', url: 'https://www.christianpost.com/rss', especializado: true, internacional: true, nichos: ['israel', 'igreja', 'pastores', 'politica-fe'] },
+  { id: 'christianitytoday', nome: 'Christianity Today', tipo: 'wp', url: 'https://www.christianitytoday.com', especializado: true, internacional: true, nichos: ['israel', 'igreja', 'pastores'] },
+  { id: 'charisma', nome: 'Charisma News', tipo: 'rss', url: 'https://mycharisma.com/category/news/feed/', especializado: true, internacional: true, nichos: ['israel', 'igreja', 'pastores', 'politica-fe'] },
+  { id: 'persecution', nome: 'International Christian Concern', tipo: 'rss', url: 'https://persecution.org/feed/', especializado: true, internacional: true, nichos: ['israel'] },
+  { id: 'faithwire', nome: 'Faithwire', tipo: 'wp', url: 'https://www.faithwire.com', especializado: true, internacional: true, nichos: ['israel', 'igreja', 'pastores'] },
+  { id: 'lifesitenews', nome: 'LifeSiteNews', tipo: 'rss', url: 'https://www.lifesitenews.com/feed/', especializado: true, internacional: true, nichos: ['catolicos', 'politica-fe', 'israel'] },
+  { id: 'baptistnews', nome: 'Baptist News Global', tipo: 'rss', url: 'https://baptistnews.com/feed/', especializado: true, internacional: true, nichos: ['igreja', 'pastores'] },
+  { id: 'churchleaders', nome: 'ChurchLeaders', tipo: 'rss', url: 'https://churchleaders.com/feed', especializado: true, internacional: true, nichos: ['igreja', 'pastores'] },
+  { id: 'roysreport', nome: 'The Roys Report', tipo: 'rss', url: 'https://roysreport.com/feed/', especializado: true, internacional: true, nichos: ['igreja', 'pastores'] },
+  { id: 'relevant', nome: 'Relevant Magazine', tipo: 'rss', url: 'https://relevantmagazine.com/feed/', especializado: true, internacional: true, nichos: ['igreja', 'gospel'] },
+  { id: 'crosswalk', nome: 'Crosswalk', tipo: 'rss', url: 'https://www.crosswalk.com/rss/', especializado: true, internacional: true, nichos: ['igreja'] },
+  { id: 'lifewayresearch', nome: 'Lifeway Research', tipo: 'rss', url: 'https://research.lifeway.com/feed/', especializado: true, internacional: true, nichos: ['igreja', 'pastores'] },
 ]);
 
 const cache = new Map();
@@ -155,7 +190,7 @@ function lerWordPress(posts, portal) {
 async function baixarPortal(portal) {
   const wp = portal.tipo === 'wp';
   const url = wp
-    ? `${portal.url}/wp-json/wp/v2/posts?per_page=25&_fields=title,link,date,date_gmt,excerpt,jetpack_featured_media_url,yoast_head_json.og_image`
+    ? `${portal.url}/wp-json/wp/v2/${portal.base || 'posts'}?per_page=25&_fields=title,link,date,date_gmt,excerpt,jetpack_featured_media_url,yoast_head_json.og_image`
     : portal.url;
   const { data } = await axios.get(url, {
     timeout: TIMEOUT_MS,
@@ -224,7 +259,7 @@ async function buscarNosPortais({ nichos = [], horas = 24 } = {}) {
     const recentes = lista.filter((item) => !item.dataTimestamp || item.dataTimestamp >= limite);
     status.push({ id: portal.id, nome: portal.nome, itens: recentes.length, erro, ms });
     for (const item of recentes) {
-      itens.push({ ...item, portal: portal.id, portalNichos: portal.nichos, especializado: Boolean(portal.especializado) });
+      itens.push({ ...item, portal: portal.id, portalNichos: portal.nichos, especializado: Boolean(portal.especializado), internacional: Boolean(portal.internacional) });
     }
   }
   return { itens, status };

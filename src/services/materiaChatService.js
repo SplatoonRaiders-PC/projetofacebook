@@ -2397,6 +2397,16 @@ async function excluirConversa({ userId, chatId }) {
   return { ok: true };
 }
 
+/** Exclusão em lote da sidebar: só apaga conversas do próprio usuário. */
+async function excluirConversas({ userId, chatIds }) {
+  const ids = [...new Set((Array.isArray(chatIds) ? chatIds : [])
+    .map((id) => Number(id))
+    .filter((id) => Number.isInteger(id) && id > 0))].slice(0, 200);
+  if (!ids.length) throw erro('Selecione pelo menos uma conversa para excluir.', 400);
+  const excluidas = await AiChats.removeMany(ids, userId);
+  return { excluidas: Number(excluidas) || 0 };
+}
+
 /**
  * Núcleo do chat: salva o pedido, pesquisa na web (avisando o progresso),
  * conversa com a IA em streaming e guarda a resposta na conversa.
@@ -5231,6 +5241,7 @@ module.exports = {
   renomearConversa,
   fixarConversa,
   excluirConversa,
+  excluirConversas,
   apagarMensagemEmDiante,
   responder,
   salvarMateriaDoChat,

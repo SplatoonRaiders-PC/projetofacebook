@@ -55,6 +55,11 @@ const AiChats = {
   remove(id, userId) {
     return db(this.table).where({ id, user_id: userId }).del();
   },
+
+  /** Exclui várias conversas do usuário de uma vez; devolve quantas saíram. */
+  removeMany(ids, userId) {
+    return db(this.table).where({ user_id: userId }).whereIn('id', ids).del();
+  },
 };
 
 module.exports = AiChats;

@@ -507,6 +507,81 @@ body.mia-chat-drawer-open {
   }
 }
 
+/* Seleção de várias conversas para excluir de uma vez */
+.mia-chat-sidebar-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.mia-chat-sidebar-row .mia-chat-sidebar-label {
+  margin-bottom: 0;
+}
+
+.mia-chat-select-toggle,
+.mia-chat-select-all {
+  border: 0;
+  border-radius: 0.35rem;
+  padding: 0.2rem 0.4rem;
+  background: transparent;
+  color: var(--mia-chat-muted);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.mia-chat-select-toggle:hover,
+.mia-chat-select-all:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.mia-chat-select-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0 0.1rem;
+}
+
+.mia-chat-select-bar.hidden {
+  display: none;
+}
+
+.mia-chat-select-del {
+  border: 0;
+  border-radius: 0.4rem;
+  padding: 0.3rem 0.6rem;
+  background: #e11d48;
+  color: #fff;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.mia-chat-select-del:hover:not(:disabled) {
+  background: #f43f5e;
+}
+
+.mia-chat-select-del:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.mia-chat-conv-check {
+  width: 0.9rem;
+  height: 0.9rem;
+  flex-shrink: 0;
+  accent-color: #e11d48;
+  cursor: pointer;
+}
+
+.mia-chat-conv.is-selected {
+  background: rgba(225, 29, 72, 0.12);
+  color: #fff;
+}
+
 .mia-chat-conv:hover .mia-chat-conv-del,
 .mia-chat-conv:focus-within .mia-chat-conv-del {
   opacity: 1;
