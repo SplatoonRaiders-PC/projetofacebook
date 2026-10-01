@@ -3845,7 +3845,15 @@ MODO SEM PESQUISA NA WEB:
 - Cada fato do texto precisa estar no conteúdo extraído. Sem inventar reação, comoção, alerta espiritual, números, datas ou falas.
 - Aspas só se forem literais. Traduza falas estrangeiras para português.
 - Reescreva com estrutura própria; não copie o original em bloco.
-- Entregue somente a matéria pronta em português do Brasil, no formato JM (título, âncora, corpo, fonte, foto, 5 hashtags, Siga o JM Notícia.).`;
+- Entregue somente a matéria pronta em português do Brasil, no formato JM (título, âncora, corpo, fonte, foto, 5 hashtags, Siga o JM Notícia.).
+
+REDAÇÃO DE JORNALISTA PROFISSIONAL (vale também para vídeo e transcrição):
+- A notícia é o FATO, não o vídeo. O lead responde quem, o quê, onde e quando com os nomes próprios, cargos, cidades, datas e números que estão na transcrição, na legenda ou na descrição.
+- Leia a transcrição inteira antes de escrever e aproveite os dados concretos dela: nome completo e idade das pessoas, local, data, valores, quantidades, a sequência do que aconteceu, o motivo, a consequência e a fala mais forte.
+- O sujeito das frases é a pessoa ou instituição do fato. É PROIBIDO narrar a fonte: “o vídeo apresenta”, “o canal destaca”, “o conteúdo publicado”, “o material disponibilizado”, “o programa mostra”, “o título do vídeo levanta”.
+- É PROIBIDO escrever o que a fonte NÃO traz: nada de “não informa a identidade”, “não foram fornecidos detalhes”, “não traz informações adicionais”, “não há declarações de”. Dado ausente simplesmente não entra.
+- Cite o canal ou veículo no máximo uma vez, depois do lead, e só para atribuir uma alegação. O crédito completo já vai no rodapé.
+- Cada parágrafo traz um fato novo, do mais importante para o menos importante. Frases diretas, verbo no pretérito, sem adjetivo de opinião.`;
 
   const system = reescritaDireta ? systemReescritaDireta : systemPesquisa;
 

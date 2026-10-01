@@ -442,6 +442,11 @@ function fonteDoPostSalvo(post, url, plataforma) {
   };
 }
 
+/** Acima disto o YouTube só entra pela legenda: não baixa nem reconhece o áudio. */
+const YOUTUBE_AUDIO_MAX_SEGUNDOS = 25 * 60;
+/** Descrição menor que isto não conta o fato; sem transcrição, não há matéria. */
+const YOUTUBE_DESCRICAO_MINIMA = 400;
+
 async function transcreverVideoComoFonte(
   url,
   {
@@ -471,9 +476,9 @@ async function transcreverVideoComoFonte(
   try {
     const { transcribeUrl, comLimiteDeTempo } = require('./transcriptionService');
     const { env } = require('../config/env');
-    // No YouTube, use somente as legendas manuais/automáticas entregues pela
-    // própria plataforma. Isso evita baixar horas de áudio sem o usuário pedir.
-    const permitirFallbackDeAudio = Boolean(permitirAudio && rotulo !== 'YouTube');
+    // No YouTube quem chama decide: só vídeo curto pode cair para o áudio
+    // (ver extrairYoutubeComoFonte), para não baixar horas sem o usuário pedir.
+    const permitirFallbackDeAudio = Boolean(permitirAudio);
     // Teto do processo inteiro: mesmo com cada etapa limitada, o editor não pode
     // ficar olhando "transcrevendo…" por meia hora.
     const resultado = await comLimiteDeTempo(
@@ -534,7 +539,9 @@ async function transcreverVideoComoFonte(
       if (rotulo === 'YouTube' && typeof onPasso === 'function') {
         onPasso({
           kind: 'transcricao-falhou',
-          texto: 'Este vídeo não disponibilizou uma legenda legível. O áudio não foi baixado.',
+          texto: permitirFallbackDeAudio
+            ? 'Não consegui a legenda nem reconhecer a fala deste vídeo.'
+            : 'Este vídeo não disponibilizou uma legenda legível. O áudio não foi baixado.',
           url,
         });
       }
@@ -564,7 +571,7 @@ async function transcreverVideoComoFonte(
         kind: 'transcricao-falhou',
         texto:
           rotulo === 'YouTube'
-            ? `Não consegui ler a legenda disponibilizada pelo YouTube; o áudio não foi baixado: ${err.message}`
+            ? `Não consegui a transcrição deste vídeo do YouTube: ${err.message}`
             : `Não consegui obter a transcrição nem processar o áudio do ${rotulo}: ${err.message}`,
         url,
       });
@@ -577,7 +584,7 @@ async function transcreverVideoComoFonte(
  * YouTube → título + descrição + transcrição disponibilizada, quando existir.
  * Não baixa o vídeo inteiro.
  */
-async function extrairYoutubeComoFonte(url, { onPasso, transcreverVideo = false } = {}) {
+async function extrairYoutubeComoFonte(url, { onPasso, transcreverVideo = false, textoManual = '' } = {}) {
   const fs = require('fs');
   const youtubedlPkg = require('youtube-dl-exec');
   const { runYtDlp } = require('./ytDlpAuth');
@@ -683,20 +690,43 @@ async function extrairYoutubeComoFonte(url, { onPasso, transcreverVideo = false 
   // Cortar só o começo escondia o desfecho: em vídeo de decisão, julgamento ou
   // votação, o resultado está no fim. Por isso o corte leva início e fim.
 
-  // Sempre tenta a transcrição disponibilizada pelo YouTube. Não baixa áudio:
-  // vídeos sem legenda continuam com título/descrição como fonte.
+  // Primeiro a legenda do próprio YouTube. Se ela não vier (o YouTube costuma
+  // negar a legenda a servidores), vídeo curto tem só o áudio baixado e
+  // reconhecido; vídeo longo e transmissão ao vivo não baixam nada.
+  const duracao = Number(info.duration) || 0;
+  const aoVivo = Boolean(info.is_live) || ['is_live', 'is_upcoming'].includes(info.live_status);
+  const audioPermitido = !aoVivo && duracao > 0 && duracao <= YOUTUBE_AUDIO_MAX_SEGUNDOS;
+  let temTranscricao = false;
   try {
     const transcricao = await transcreverVideoComoFonte(url, {
       onPasso,
       rotulo: 'YouTube',
       mediaInfo: info,
-      permitirAudio: false,
+      contextText: [titulo, descricao].filter(Boolean).join('\n').slice(0, 600),
+      permitirAudio: audioPermitido,
     });
     if (String(transcricao || '').length >= 40) {
+      temTranscricao = true;
       trecho = `${trecho}\n\nTranscrição do vídeo:\n${recortarTranscricao(transcricao)}`;
     }
   } catch (err) {
     console.warn('[materia-chat] youtube subs:', err.message);
+  }
+
+  // Só com o título a matéria sai genérica ("o vídeo não informa…"). Sem a
+  // fala do vídeo, sem descrição que conte o fato e sem texto do editor, para.
+  if (
+    !temTranscricao &&
+    descricao.length < YOUTUBE_DESCRICAO_MINIMA &&
+    String(textoManual || '').trim().length < 80
+  ) {
+    console.warn(`[materia-chat] youtube sem transcrição e sem descrição útil: ${url}`);
+    const err = new Error(
+      'Não consegui a transcrição deste vídeo do YouTube (sem legenda disponível e sem áudio reconhecido), e só o título não rende uma matéria. Tente de novo em alguns minutos ou cole no chat o que é dito no vídeo.'
+    );
+    err.status = 422;
+    err.code = 'YOUTUBE_SEM_TRANSCRICAO';
+    throw err;
   }
 
   if (String(trecho || '').trim().length < 40) {
@@ -759,7 +789,7 @@ async function extrairFontesDeLinks(
 
     try {
       if (tipo === 'youtube') {
-        fontes.push(await extrairYoutubeComoFonte(raw, { onPasso, transcreverVideo }));
+        fontes.push(await extrairYoutubeComoFonte(raw, { onPasso, transcreverVideo, textoManual }));
         continue;
       }
 
@@ -5242,6 +5272,7 @@ module.exports = {
   fixarConversa,
   excluirConversa,
   excluirConversas,
+  extrairYoutubeComoFonte,
   apagarMensagemEmDiante,
   responder,
   salvarMateriaDoChat,
