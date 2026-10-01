@@ -72,6 +72,7 @@
     return {
       nichos: lerSalvo('ViralizeAI.furosNichos', ['auto']),
       canais: lerSalvo('ViralizeAI.furosCanais', ['noticias', 'youtube', 'instagram', 'facebook']),
+      palavras: document.getElementById('furos-palavras')?.value.trim() || '',
       horas,
     };
   }
@@ -166,6 +167,11 @@
       }
       el.foto.checked = config.foto_original_se_falhar !== false;
       if (config.facebook_page_id) el.pagina.value = String(config.facebook_page_id);
+      // Outro navegador/computador: traz as palavras-chave que o piloto usa.
+      const campoPalavras = document.getElementById('furos-palavras');
+      if (campoPalavras && !campoPalavras.value.trim() && (config.palavras || []).length) {
+        campoPalavras.value = config.palavras.join(', ');
+      }
     }
     el.escanear.hidden = !config.ativo;
     secao.classList.toggle('is-ativo', Boolean(config.ativo));
@@ -179,6 +185,7 @@
       const imagens = (contagens.gerando_imagem || 0);
       const partes = [
         `Ligado · posta a cada ${config.intervalo_minutos} min`,
+        (config.palavras || []).length ? `palavras-chave: ${config.palavras.join(', ')}` : null,
         status.modeloNome ? `escreve com ${status.modeloNome}` : null,
         config.proxima_postagem_at && new Date(config.proxima_postagem_at) > new Date()
           ? `próxima postagem às ${hora(config.proxima_postagem_at)}`

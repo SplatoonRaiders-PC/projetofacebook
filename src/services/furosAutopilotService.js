@@ -103,6 +103,7 @@ function chaveDaPauta(pauta) {
 
 async function atualizarItem(id, dados) {
   await db(ITENS).where({ id }).update({ ...dados, updated_at: db.fn.now() });
+  if (AVISAR_NO_CELULAR.has(dados.status)) avisarNoCelular(id);
 }
 
 /**
@@ -110,7 +111,53 @@ async function atualizarItem(id, dados) {
  * cancelou a fila no meio da escrita/imagem, o resultado não o "ressuscita".
  */
 async function atualizarSeAinda(id, statusAtual, dados) {
-  return db(ITENS).where({ id, status: statusAtual }).update({ ...dados, updated_at: db.fn.now() });
+  const alteradas = await db(ITENS).where({ id, status: statusAtual }).update({ ...dados, updated_at: db.fn.now() });
+  if (alteradas && AVISAR_NO_CELULAR.has(dados.status)) avisarNoCelular(id);
+  return alteradas;
+}
+
+// ------------------------------------------------------------ aviso no ntfy
+
+/** Publicada e não publicada (erro na escrita, na imagem ou no envio). */
+const AVISAR_NO_CELULAR = new Set(['publicada', 'erro']);
+
+/** Não segura o piloto: o aviso sai em segundo plano e falha em silêncio. */
+function avisarNoCelular(itemId) {
+  setImmediate(() => {
+    enviarAviso(itemId).catch((err) => console.warn(`[furos-auto] ntfy item ${itemId}:`, err.message));
+  });
+}
+
+async function nomeDaPagina(pageId) {
+  if (!pageId) return null;
+  const page = await db('facebook_pages').where({ id: pageId }).first('page_name').catch(() => null);
+  return page?.page_name || null;
+}
+
+async function enviarAviso(itemId) {
+  const item = await db(ITENS).where({ id: itemId }).first();
+  if (!item || !AVISAR_NO_CELULAR.has(item.status)) return;
+  const cfg = await db(CONFIG).where({ user_id: item.user_id }).first();
+  if (!cfg?.ntfy_topico) return;
+  const publicada = item.status === 'publicada';
+  if (publicada ? cfg.ntfy_publicada === false || cfg.ntfy_publicada === 0 : cfg.ntfy_falha === false || cfg.ntfy_falha === 0) return;
+
+  const matter = item.matter_id
+    ? await require('../models/AiMatters').findById(item.matter_id).catch(() => null)
+    : null;
+  const pagina = await nomeDaPagina(matter?.facebook_page_id || cfg.facebook_page_id);
+  const titulo = tituloLimpo(matter?.titulo || item.titulo) || 'Matéria sem título';
+  const base = String(require('../config/env').appPublicUrl || '').replace(/\/$/, '');
+  await require('./ntfyService').enviar({
+    servidor: cfg.ntfy_servidor,
+    topico: cfg.ntfy_topico,
+    token: cfg.ntfy_token,
+    titulo: `${publicada ? 'Publicada' : 'Não publicada'}${pagina ? ` · ${pagina}` : ''}`,
+    mensagem: publicada ? titulo : `${titulo}\n\nMotivo: ${item.erro || 'falha sem detalhe.'}`,
+    tags: publicada ? ['white_check_mark'] : ['x'],
+    prioridade: publicada ? 3 : 4,
+    clique: base && item.matter_id ? `${base}/materias-ia/${item.matter_id}` : null,
+  });
 }
 
 /** Escolhidas pelo editor passam na frente; depois, pela nota. */
@@ -136,6 +183,7 @@ function formatarConfig(row) {
     ativo: Boolean(row?.ativo),
     pausado_at: row?.pausado_at || null,
     nichos: parseJson(row?.nichos, ['auto']),
+    palavras: parseJson(row?.palavras, []),
     canais: parseJson(row?.canais, ['noticias', 'youtube', 'instagram', 'facebook']),
     horas: Number(row?.horas) || 24,
     intervalo_minutos: Number(row?.intervalo_minutos) || 10,
@@ -147,7 +195,62 @@ function formatarConfig(row) {
     proxima_postagem_at: row?.proxima_postagem_at || null,
     ultimo_erro: row?.ultimo_erro || null,
     ultimo_scan_resumo: row?.ultimo_scan_resumo || null,
+    ntfy: {
+      topico: row?.ntfy_topico || null,
+      servidor: row?.ntfy_servidor || null,
+      token_definido: Boolean(row?.ntfy_token),
+      publicada: row ? row.ntfy_publicada !== false && row.ntfy_publicada !== 0 : true,
+      falha: row ? row.ntfy_falha !== false && row.ntfy_falha !== 0 : true,
+    },
   };
+}
+
+/**
+ * Notificações no app ntfy. Tópico vazio desliga. O token só é trocado
+ * quando vem preenchido (ou removido com `remover_token`).
+ */
+async function salvarNtfy(userId, entrada = {}) {
+  const ntfy = require('./ntfyService');
+  const topico = ntfy.normalizarTopico(entrada.topico);
+  const servidorDigitado = String(entrada.servidor || '').trim();
+  const servidor = servidorDigitado ? ntfy.normalizarServidor(servidorDigitado) : null;
+  const dados = {
+    ntfy_topico: topico,
+    ntfy_servidor: servidor && servidor !== ntfy.SERVIDOR_PADRAO ? servidor : null,
+    ntfy_publicada: entrada.publicada !== false,
+    ntfy_falha: entrada.falha !== false,
+  };
+  const token = String(entrada.token || '').trim();
+  if (token) dados.ntfy_token = corta(token, 255);
+  else if (entrada.remover_token || !topico) dados.ntfy_token = null;
+
+  const atual = await db(CONFIG).where({ user_id: userId }).first('id');
+  if (atual) await atualizarConfig(userId, dados);
+  else {
+    await db(CONFIG).insert({
+      user_id: userId,
+      ativo: false,
+      nichos: JSON.stringify(['auto']),
+      canais: JSON.stringify(require('./furosService').CANAIS),
+      ...dados,
+    });
+  }
+  return statusPainel(userId);
+}
+
+/** Manda uma notificação de teste para o tópico salvo. */
+async function testarNtfy(userId) {
+  const cfg = await db(CONFIG).where({ user_id: userId }).first();
+  if (!cfg?.ntfy_topico) throw erro(400, 'Salve um tópico do ntfy antes de testar.');
+  await require('./ntfyService').enviar({
+    servidor: cfg.ntfy_servidor,
+    topico: cfg.ntfy_topico,
+    token: cfg.ntfy_token,
+    titulo: 'ViralizeAI · teste',
+    mensagem: 'Notificações do piloto automático funcionando. Você vai receber aqui as matérias publicadas e as que não forem publicadas.',
+    tags: ['bell'],
+  });
+  return statusPainel(userId);
 }
 
 async function registrarResumo(userId, texto) {
@@ -162,6 +265,7 @@ async function salvarConfig(userId, entrada = {}) {
     .slice(0, 4);
   const canais = [...new Set((Array.isArray(entrada.canais) ? entrada.canais : []).map(String))]
     .filter((c) => furosService.CANAIS.includes(c));
+  const palavras = furosService.palavrasValidas(entrada.palavras);
   const intervalo = Number(entrada.intervalo_minutos);
   if (!INTERVALOS.includes(intervalo)) throw erro(400, `Escolha um intervalo de ${INTERVALOS.join(', ')} minutos.`);
   const limiteDia = Math.round(Number(entrada.limite_dia) || 40);
@@ -179,6 +283,7 @@ async function salvarConfig(userId, entrada = {}) {
   const dados = {
     ativo,
     nichos: JSON.stringify(nichos.length ? nichos : ['auto']),
+    palavras: JSON.stringify(palavras),
     canais: JSON.stringify(canais.length ? canais : furosService.CANAIS),
     horas,
     intervalo_minutos: intervalo,
@@ -545,6 +650,7 @@ async function escanear(row, { forcar = false } = {}) {
     const resultado = await require('./furosService').buscarFuros({
       userId,
       nichos: config.nichos,
+      palavras: config.palavras,
       horas: config.horas,
       limite: 40,
       canais: config.canais,
@@ -1195,6 +1301,8 @@ module.exports = {
   INTERVALOS,
   MAX_IMAGENS,
   salvarConfig,
+  salvarNtfy,
+  testarNtfy,
   statusPainel,
   pausar,
   retomar,

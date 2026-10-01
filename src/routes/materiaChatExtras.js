@@ -652,6 +652,7 @@ router.post('/furos/buscar', async (req, res, next) => {
     const resultado = await require('../services/furosService').buscarFuros({
       userId: req.session.userId,
       nichos: Array.isArray(body.nichos) ? body.nichos.slice(0, 8) : [],
+      palavras: Array.isArray(body.palavras) ? body.palavras.slice(0, 10) : String(body.palavras || ''),
       horas: Number(body.horas) || 24,
       limite: Math.min(Math.max(Number(body.limite) || 12, 3), 40),
       canais: Array.isArray(body.canais) ? body.canais.slice(0, 4) : [],
@@ -702,6 +703,13 @@ router.get('/furos/auto', (req, res, next) =>
 
 router.put('/furos/auto', (req, res, next) =>
   responderAuto(res, next, require('../services/furosAutopilotService').salvarConfig(req.session.userId, req.body || {})));
+
+/** Notificações no app ntfy (publicada / não publicada). */
+router.put('/furos/auto/ntfy', (req, res, next) =>
+  responderAuto(res, next, require('../services/furosAutopilotService').salvarNtfy(req.session.userId, req.body || {})));
+
+router.post('/furos/auto/ntfy/teste', (req, res, next) =>
+  responderAuto(res, next, require('../services/furosAutopilotService').testarNtfy(req.session.userId)));
 
 router.put('/furos/auto/modelo', (req, res, next) =>
   responderAuto(res, next, require('../services/furosAutopilotService').salvarModelo(req.session.userId, req.body?.modelo)));

@@ -63,6 +63,51 @@ const NICHOS = Object.freeze([
 
 const NICHOS_PADRAO = ['politica-fe', 'igreja', 'pastores'];
 const MAX_NICHOS = 4;
+const MAX_PALAVRAS = 5;
+
+// Palavras que não identificam assunto ("a", "de", "para"…): ficam fora do
+// filtro da palavra-chave, senão qualquer notícia passaria.
+const PALAVRAS_VAZIAS = new Set([
+  'que', 'com', 'para', 'por', 'dos', 'das', 'nos', 'nas', 'uma', 'umas', 'uns', 'sobre', 'entre', 'ate', 'mais', 'como', 'sem', 'ser',
+]);
+
+/**
+ * Palavras-chave digitadas pelo editor: aceita lista ou texto separado por
+ * vírgula/linha, sem repetir, até MAX_PALAVRAS de no máximo 60 caracteres.
+ */
+function palavrasValidas(entrada) {
+  const lista = Array.isArray(entrada) ? entrada : String(entrada || '').split(/[,;\n]/);
+  const vistas = new Set();
+  const saida = [];
+  for (const bruta of lista) {
+    const palavra = String(bruta || '').replace(/["“”]/g, '').replace(/\s+/g, ' ').trim().slice(0, 60);
+    const chave = normalizar(palavra);
+    if (chave.length < 2 || vistas.has(chave)) continue;
+    vistas.add(chave);
+    saida.push(palavra);
+    if (saida.length >= MAX_PALAVRAS) break;
+  }
+  return saida;
+}
+
+/**
+ * A palavra-chave vira um "nicho" de uma busca só: as mesmas fontes (Google
+ * News, portais, YouTube, redes) procuram por ela, e a pauta só conta como do
+ * assunto se citar todos os termos dela ("Silas Malafaia" exige os dois).
+ */
+function nichoDaPalavra(palavra, indice) {
+  const chave = normalizar(palavra);
+  const termos = chave.split(' ').filter((t) => t.length >= 3 && !PALAVRAS_VAZIAS.has(t));
+  const consultas = chave.includes(' ') ? [palavra, `"${palavra}"`] : [palavra];
+  return {
+    id: `palavra-${indice}`,
+    rotulo: palavra,
+    consultas,
+    palavras: termos.length ? termos : [chave],
+    exigeTodas: true,
+    palavraChave: true,
+  };
+}
 
 /**
  * Palavras que costumam indicar notícia de alta repercussão no feed. Pesam
@@ -149,7 +194,8 @@ function pontuarBomba(item, agora = Date.now()) {
 function pertenceAoNicho(item, nicho) {
   if (!nicho) return true;
   const texto = normalizar(`${item?.titulo || ''} ${item?.resumo || ''}`);
-  return nicho.palavras.some((palavra) => comecaCom(texto, palavra));
+  const cita = (palavra) => comecaCom(texto, palavra);
+  return nicho.exigeTodas ? nicho.palavras.every(cita) : nicho.palavras.some(cita);
 }
 
 /** Palavra do nicho como prefixo: "pastor" também pega "pastores" e "pastora". */
@@ -423,22 +469,33 @@ function pareceEspanhol(titulo) {
 /**
  * Busca e ordena. `nichos` vazio ou ['auto'] usa a escolha automática.
  * `canais`: 'noticias' (Google News), 'youtube', 'instagram', 'facebook'.
+ * `palavras`: palavras-chave do editor. Com "Automático", a busca fica só
+ * nelas; com nichos marcados, procura nos dois.
  */
 /**
  * `completar: false` (piloto automático) pula a troca do link do Google News
  * e a leitura da foto de cada pauta — dezenas de buscas em Python por
  * varredura. O piloto faz isso só na pauta que for escrever.
  */
-async function buscarFuros({ userId, nichos = [], horas = 24, limite = 12, canais = [], completar = true } = {}) {
-  const automatico = !nichos.length || nichos.includes('auto');
-  const ids = automatico ? await escolherNichosAutomaticos(userId) : nichosValidos(nichos);
-  if (!ids.length) {
-    const err = new Error('Escolha pelo menos um nicho.');
+async function buscarFuros({ userId, nichos = [], palavras = [], horas = 24, limite = 12, canais = [], completar = true } = {}) {
+  const termos = palavrasValidas(palavras);
+  const pediuAutomatico = !nichos.length || nichos.includes('auto');
+  // Palavra-chave digitada com "Automático": a busca é só pelo que foi digitado.
+  const soPalavras = termos.length > 0 && pediuAutomatico;
+  const automatico = pediuAutomatico && !soPalavras;
+  const ids = soPalavras ? [] : automatico ? await escolherNichosAutomaticos(userId) : nichosValidos(nichos);
+  if (!ids.length && !termos.length) {
+    const err = new Error('Escolha pelo menos um nicho ou digite uma palavra-chave.');
     err.status = 400;
     throw err;
   }
 
-  const selecionados = NICHOS.filter((n) => ids.includes(n.id));
+  const doNichoFixo = NICHOS.filter((n) => ids.includes(n.id));
+  const rotulosFixos = new Set(doNichoFixo.map((n) => normalizar(n.rotulo)));
+  const selecionados = [
+    ...termos.filter((p) => !rotulosFixos.has(normalizar(p))).map(nichoDaPalavra),
+    ...doNichoFixo,
+  ];
   const listaCanais = canaisValidos(canais);
   const querNoticias = listaCanais.includes('noticias');
   const { radarPorTemas } = require('../routes/materiaChatExtras');
@@ -468,7 +525,11 @@ async function buscarFuros({ userId, nichos = [], horas = 24, limite = 12, canai
     }).catch((err) => ({ itens: [], avisos: [err.message] })),
     // Portais gospel e de política lidos direto (feed/WordPress), com cache.
     querNoticias
-      ? buscarNosPortais({ nichos: selecionados.map((n) => n.id), horas: janela }).catch(() => ({ itens: [], status: [] }))
+      ? buscarNosPortais({
+          // Só palavra-chave: lê todos os portais e fica com o que citar a palavra.
+          nichos: soPalavras ? NICHOS.map((n) => n.id) : doNichoFixo.map((n) => n.id),
+          horas: janela,
+        }).catch(() => ({ itens: [], status: [] }))
       : { itens: [], status: [] },
   ]);
 
@@ -503,9 +564,13 @@ async function buscarFuros({ userId, nichos = [], horas = 24, limite = 12, canai
   // Pauta que não cita o nicho é ruído do Google; só completa uma lista curta.
   const rotulos = selecionados.map((n) => n.rotulo);
   // Vídeo do YouTube que não cita o nicho no título costuma ser ruído da busca.
+  // Na busca só por palavra-chave, post das páginas monitoradas (sem nicho)
+  // precisa citar a palavra; senão a lista enche de post fora do assunto.
+  const citaAlgumaPalavra = (item) => selecionados.some((n) => n.palavraChave && pertenceAoNicho(item, n));
   const sociaisNoNicho = (sociais.itens || []).filter(
     (item) =>
       dentroDaJanela(item) &&
+      (!soPalavras || item.nicho || citaAlgumaPalavra(item)) &&
       (item.canal !== 'youtube' ||
         (!pareceEspanhol(item.titulo) && (!item.nicho || pertenceAoNicho(item, nichoPorRotulo.get(item.nicho)))))
   );
@@ -533,7 +598,8 @@ async function buscarFuros({ userId, nichos = [], horas = 24, limite = 12, canai
   const porCanal = {};
   for (const furo of furos) porCanal[furo.canal] = (porCanal[furo.canal] || 0) + 1;
   return {
-    nichos: selecionados.map(({ id, rotulo }) => ({ id, rotulo })),
+    nichos: doNichoFixo.map(({ id, rotulo }) => ({ id, rotulo })),
+    palavras: selecionados.filter((n) => n.palavraChave).map((n) => n.rotulo),
     canais: listaCanais,
     automatico,
     horas: janela,
@@ -714,6 +780,7 @@ module.exports = {
   statusGeracao,
   listarNichos,
   escolherNichosAutomaticos,
+  palavrasValidas,
   pontuarBomba,
   buscarFuros,
   gerarFuro,

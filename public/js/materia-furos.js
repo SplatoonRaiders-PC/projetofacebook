@@ -13,6 +13,7 @@
   const NICHOS_KEY = 'ViralizeAI.furosNichos';
   const CANAIS_KEY = 'ViralizeAI.furosCanais';
   const LIMITE_KEY = 'ViralizeAI.furosLimite';
+  const PALAVRAS_KEY = 'ViralizeAI.furosPalavras';
   const MAX_LOTE = 12;
   const ROTULO_CANAL = { noticias: 'Notícia', youtube: 'YouTube', instagram: 'Instagram', facebook: 'Facebook' };
   const ESPERA_REDE_MS = 15 * 60 * 1000;
@@ -33,6 +34,7 @@
     destinoAjuda: document.getElementById('furos-destino-ajuda'),
     canais: dialog.querySelectorAll('[data-furos-canal]'),
     limite: document.getElementById('furos-limite'),
+    palavras: document.getElementById('furos-palavras'),
   };
 
   const state = {
@@ -197,6 +199,17 @@
       salvar(CANAIS_KEY, [...state.canais]);
       renderCanais();
     });
+  });
+
+  // Palavras-chave: ficam salvas (o piloto automático também usa) e Enter busca.
+  const palavrasSalvas = lerSalvo(PALAVRAS_KEY);
+  if (el.palavras && typeof palavrasSalvas === 'string') el.palavras.value = palavrasSalvas;
+  el.palavras?.addEventListener('input', () => salvar(PALAVRAS_KEY, el.palavras.value.trim()));
+  el.palavras?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      buscar();
+    }
   });
 
   const limiteSalvo = Number(lerSalvo(LIMITE_KEY));
@@ -428,6 +441,7 @@
         method: 'POST',
         body: JSON.stringify({
           nichos: [...state.selecionados],
+          palavras: el.palavras?.value.trim() || '',
           horas: state.horas,
           limite: Number(el.limite?.value) || 25,
           canais: [...state.canais],
@@ -435,7 +449,7 @@
       });
       state.furos = data.furos || [];
       renderFuros();
-      const nichos = (data.nichos || []).map((n) => n.rotulo).join(', ');
+      const nichos = [...(data.palavras || []).map((p) => `“${p}”`), ...(data.nichos || []).map((n) => n.rotulo)].join(', ');
       const porCanal = Object.entries(data.porCanal || {})
         .map(([canal, total]) => `${total} ${canal === 'noticias' ? 'notícias' : ROTULO_CANAL[canal] || canal}`)
         .join(', ');
@@ -447,7 +461,7 @@
       setStatus(
         state.furos.length
           ? `${state.furos.length} pautas em ${nichos}${porCanal ? ` (${porCanal})` : ''} · últimas ${data.horas}h${varredura}${data.totalOcultado ? ` · ${data.totalOcultado} já viraram matéria e foram escondidas` : ''}${avisos}.`
-          : `Nada novo em ${nichos} nas últimas ${data.horas}h. Tente 48h, outro nicho ou mais fontes.${avisos}`,
+          : `Nada novo em ${nichos} nas últimas ${data.horas}h. Tente 48h, outra palavra-chave, outro nicho ou mais fontes.${avisos}`,
         state.furos.length ? '' : 'aviso'
       );
     } catch (err) {

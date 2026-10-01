@@ -545,6 +545,17 @@ body.mia-furos-aberto { overflow: hidden; }
 /* Furos do dia — onde procurar (Notícias, YouTube, Instagram, Facebook) e quantidade */
 .mia-manual-claude .mia-furos-canais { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; }
 .mia-manual-claude .mia-furos-canais-rotulo { margin-right: .15rem; color: var(--mia-chat-muted); font-size: .72rem; font-weight: 600; }
+.mia-manual-claude .mia-furos-palavras { display: flex; align-items: center; gap: .55rem; }
+.mia-manual-claude .mia-furos-palavras .mia-furos-canais-rotulo { flex: none; }
+.mia-manual-claude .mia-furos-palavras input {
+  flex: 1; min-width: 0; padding: .45rem .7rem; border: 1px solid var(--mia-chat-border); border-radius: .6rem;
+  background: rgb(255 255 255 / 3%); color: var(--mia-chat-text); font-size: .78rem;
+}
+.mia-manual-claude .mia-furos-palavras input::placeholder { color: var(--mia-chat-muted); opacity: .8; }
+.mia-manual-claude .mia-furos-palavras input:focus { outline: none; border-color: rgb(251 146 60 / 60%); }
+@media (max-width: 520px) {
+  .mia-manual-claude .mia-furos-palavras { flex-direction: column; align-items: stretch; gap: .3rem; }
+}
 .mia-manual-claude .mia-furos-qtd select {
   padding: .45rem .6rem; border: 1px solid var(--mia-chat-border); border-radius: .6rem;
   background: rgb(255 255 255 / 3%); color: var(--mia-chat-text); font-size: .76rem;

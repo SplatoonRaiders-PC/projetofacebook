@@ -103,9 +103,10 @@ function carregar({ imagem, avaliacoes = null, furos = [], gerarFuro = null, gat
     furos_autopilot_itens: [],
     ai_matters: [],
     ai_fila_jobs: [],
+    facebook_pages: [{ id: 7, page_name: 'Gospel Geral' }],
   };
   const matters = new Map();
-  const eventos = { imagensJuntas: 0, maxImagens: 0, escritasDuranteImagem: 0, publicadas: [] };
+  const eventos = { imagensJuntas: 0, maxImagens: 0, escritasDuranteImagem: 0, publicadas: [], avisos: [] };
   const mocks = {
     '../config/db': criarDb(tabelas),
     './furosService': {
@@ -172,6 +173,13 @@ function carregar({ imagem, avaliacoes = null, furos = [], gerarFuro = null, gat
       nomeModeloHumano: (m) => (m === 'gpt-5.6' ? 'ChatGPT 5.6' : m),
     },
     './tokenFreeGatewayService': { comModelo: (_m, fn) => fn() },
+    './ntfyService': {
+      SERVIDOR_PADRAO: 'https://ntfy.sh',
+      enviar: async (aviso) => { eventos.avisos.push(aviso); },
+      normalizarTopico: (t) => String(t || '').trim() || null,
+      normalizarServidor: (v) => String(v || '').trim() || 'https://ntfy.sh',
+    },
+    '../config/env': { appPublicUrl: 'https://app.test' },
     './materiaChatService': {},
     './deepseekService': {
       usarTokenFree: () => gateway,
@@ -723,4 +731,61 @@ test('pausar desfaz os agendamentos da IA que ainda não saíram; cancelar a fil
   await ctx.service.cancelarFilaManual(1);
   assert.equal(escolhidaAgendada.status, 'descartada');
   assert.equal(ctx.matters.get(escolhidaAgendada.matter_id).status, 'rascunho');
+});
+
+test('ntfy: avisa no celular quando publica e quando não publica, com o motivo', async () => {
+  const ctx = carregar({ imagem: () => esperar(5) });
+  Object.assign(ctx.tabelas.furos_autopilot[0], { ntfy_topico: 'viralizeai-teste1', ntfy_publicada: true, ntfy_falha: true });
+  naFila(ctx.tabelas, 2);
+  await rodar(ctx.service, 20);
+  await esperar(20);
+  const publicada = ctx.eventos.avisos.find((a) => a.titulo.startsWith('Publicada'));
+  assert.ok(publicada, 'aviso de publicada');
+  assert.equal(publicada.titulo, 'Publicada · Gospel Geral');
+  assert.equal(publicada.topico, 'viralizeai-teste1');
+  assert.match(publicada.clique, /^https:\/\/app\.test\/materias-ia\/\d+$/);
+  assert.equal(ctx.eventos.avisos.filter((a) => a.titulo.startsWith('Publicada')).length, 1, 'um aviso por matéria');
+
+  // Falha no envio (agendador do sistema marcou erro): aviso de não publicada.
+  const agendada = ctx.tabelas.furos_autopilot_itens.find((i) => i.status === 'agendada');
+  assert.ok(agendada);
+  const job = ctx.tabelas.ai_fila_jobs.find((j) => j.matter_id === agendada.matter_id && j.status === 'pendente');
+  Object.assign(job, { status: 'erro', erro: 'Token da página expirou' });
+  await rodar(ctx.service, 2);
+  await esperar(20);
+  const falha = ctx.eventos.avisos.find((a) => a.titulo.startsWith('Não publicada'));
+  assert.ok(falha, 'aviso de não publicada');
+  assert.match(falha.mensagem, /Motivo: Publicação: Token da página expirou/);
+  assert.equal(falha.tags.join(','), 'x');
+});
+
+test('ntfy: sem tópico ou com o aviso desmarcado, não manda nada', async () => {
+  const ctx = carregar({ imagem: () => esperar(5) });
+  Object.assign(ctx.tabelas.furos_autopilot[0], { ntfy_topico: 'viralizeai-teste2', ntfy_publicada: false, ntfy_falha: true });
+  naFila(ctx.tabelas, 1);
+  await rodar(ctx.service, 15);
+  await esperar(20);
+  assert.ok(ctx.tabelas.furos_autopilot_itens.some((i) => i.status === 'publicada'));
+  assert.equal(ctx.eventos.avisos.length, 0);
+
+  const semTopico = carregar({ imagem: () => esperar(5) });
+  naFila(semTopico.tabelas, 1);
+  await rodar(semTopico.service, 15);
+  await esperar(20);
+  assert.equal(semTopico.eventos.avisos.length, 0);
+});
+
+test('ntfy: salvar guarda tópico e token sem devolver o token ao navegador', async () => {
+  const ctx = carregar({ imagem: () => esperar(5) });
+  const s = await ctx.service.salvarNtfy(1, { topico: 'viralizeai-abc123', token: 'tk_segredo', publicada: true, falha: false });
+  assert.equal(s.config.ntfy.topico, 'viralizeai-abc123');
+  assert.equal(s.config.ntfy.token_definido, true);
+  assert.equal(s.config.ntfy.falha, false);
+  assert.ok(!JSON.stringify(s).includes('tk_segredo'));
+  assert.equal(ctx.tabelas.furos_autopilot[0].ntfy_token, 'tk_segredo');
+  // Salvar de novo sem token mantém o que estava.
+  await ctx.service.salvarNtfy(1, { topico: 'viralizeai-abc123', publicada: true, falha: true });
+  assert.equal(ctx.tabelas.furos_autopilot[0].ntfy_token, 'tk_segredo');
+  await ctx.service.testarNtfy(1);
+  assert.equal(ctx.eventos.avisos.at(-1).titulo, 'ViralizeAI · teste');
 });
