@@ -238,6 +238,18 @@
       padding: .25rem .5rem; font-size: .68rem; font-weight: 600; cursor: pointer;
     }
     .mia-x-card-gerar:hover { border-color: rgba(16,185,129,.8); color: #fff; }
+    .mia-x-card-gerar:disabled { opacity: .6; cursor: default; }
+    .mia-x-card-publicar {
+      border: 0; border-radius: .5rem; padding: .25rem .55rem; cursor: pointer;
+      background: linear-gradient(135deg, #fdba74, #fb923c); color: #431407; font-size: .68rem; font-weight: 700;
+    }
+    .mia-x-card-publicar:hover:not(:disabled) { filter: brightness(1.08); }
+    .mia-x-card-publicar:disabled { opacity: .55; cursor: default; }
+    .mia-x-card-fila { display: block; margin-top: .3rem; font-size: .68rem; font-weight: 600; color: #fdba74; }
+    .mia-x-card-fila[data-estado="ok"] { color: #6ee7b7; }
+    .mia-x-card-fila[data-estado="erro"] { color: #fda4af; }
+    .mia-x-card-fila a { margin-left: .35rem; color: #6ee7b7; text-decoration: underline; text-underline-offset: 2px; }
+    .mia-x-card.is-publicada { border-color: rgba(52,211,153,.55); background: rgba(16,185,129,.07); }
     .mia-x-card-fonte {
       border: 1px solid #334155; border-radius: .5rem; background: transparent; color: #cbd5e1;
       padding: .25rem .5rem; font-size: .68rem; font-weight: 600; text-decoration: none;
@@ -595,6 +607,104 @@
         }
       });
     }
+  }
+
+  /* ------------------- publicar direto do card (fila do servidor) ------------------- */
+
+  // Mesma fila do Furos do dia: a matéria é escrita, ganha imagem com IA e é
+  // publicada sozinha no servidor. O card mostra cada etapa até publicar.
+  const ETAPA_PUBLICACAO = {
+    na_fila: 'Na fila para escrever…',
+    escrevendo: 'Escrevendo a matéria…',
+    aguardando_imagem: 'Esperando a vez da imagem…',
+    gerando_imagem: 'Gerando a imagem com IA…',
+    pronta: 'Pronta, agendando…',
+    publicando: 'Publicando…',
+  };
+  const publicacoesAcompanhadas = new Map(); // itemId -> { card, botao, linha }
+  let timerPublicacoes = null;
+
+  function horaCurta(valor) {
+    const d = valor ? new Date(valor) : null;
+    return d && !Number.isNaN(d.getTime()) ? d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '';
+  }
+
+  function pautaParaFila(topico) {
+    return {
+      titulo: topico.titulo,
+      url: topico.url,
+      veiculo: topico.pagina ? `Facebook · ${topico.pagina}` : topico.veiculo || 'Web',
+      resumo: topico.resumo || '',
+      imagem: topico.imagem || null,
+      data: topico.data || null,
+      dataTimestamp: Number(topico.dataTimestamp) || null,
+      nicho: topico.tema || null,
+      canal: 'noticias',
+      score: Number(topico.calor) || 0,
+    };
+  }
+
+  function mostrarEtapaNoCard(alvo, texto, estado = '', matterId = null) {
+    alvo.linha.textContent = texto;
+    alvo.linha.dataset.estado = estado;
+    if (matterId && estado === 'ok') {
+      const ver = document.createElement('a');
+      ver.href = `/materias-ia/${matterId}`;
+      ver.target = '_blank';
+      ver.rel = 'noopener';
+      ver.textContent = 'Ver matéria';
+      alvo.linha.append(ver);
+    }
+  }
+
+  async function acompanharPublicacoes() {
+    clearTimeout(timerPublicacoes);
+    if (!publicacoesAcompanhadas.size) return;
+    try {
+      const status = await apiJson(`${API}/furos/auto`);
+      const porId = new Map([...(status.itens || []), ...(status.foraDaFila || [])].map((i) => [Number(i.id), i]));
+      for (const [itemId, alvo] of publicacoesAcompanhadas) {
+        if (!alvo.card.isConnected) {
+          publicacoesAcompanhadas.delete(itemId);
+          continue;
+        }
+        const item = porId.get(itemId);
+        if (!item) continue;
+        if (item.status === 'publicada') {
+          mostrarEtapaNoCard(alvo, `Publicada às ${horaCurta(item.publicado_at)}`, 'ok', item.matter_id);
+          alvo.card.classList.add('is-publicada');
+          alvo.botao.textContent = 'Publicada';
+          publicacoesAcompanhadas.delete(itemId);
+        } else if (item.status === 'erro' || item.status === 'descartada') {
+          mostrarEtapaNoCard(alvo, `Não publicada: ${item.erro || item.motivo || 'falhou'}`, 'erro');
+          alvo.botao.disabled = false;
+          alvo.botao.textContent = 'Publicar de novo';
+          publicacoesAcompanhadas.delete(itemId);
+        } else if (item.status === 'agendada') {
+          mostrarEtapaNoCard(alvo, `Agendada para ${horaCurta(item.agendado_para)} (publica sozinha)`);
+        } else {
+          mostrarEtapaNoCard(alvo, ETAPA_PUBLICACAO[item.status] || 'Na fila…');
+        }
+      }
+    } catch {
+      // tenta de novo na próxima volta
+    }
+    if (publicacoesAcompanhadas.size) timerPublicacoes = setTimeout(acompanharPublicacoes, 10_000);
+  }
+
+  function acompanharPublicacao(itemId, card, botao) {
+    if (!itemId) return;
+    let linha = card.querySelector('.mia-x-card-fila');
+    if (!linha) {
+      linha = document.createElement('span');
+      linha.className = 'mia-x-card-fila';
+      (card.querySelector('.mia-x-card-txt') || card).appendChild(linha);
+    }
+    const alvo = { card, botao, linha };
+    mostrarEtapaNoCard(alvo, ETAPA_PUBLICACAO.na_fila);
+    publicacoesAcompanhadas.set(Number(itemId), alvo);
+    clearTimeout(timerPublicacoes);
+    timerPublicacoes = setTimeout(acompanharPublicacoes, 4_000);
   }
 
   async function salvarTopicosComoRascunhos(topicos) {
@@ -1202,18 +1312,7 @@
           const data = await apiJson(`${API}/furos/auto/fila`, {
             method: 'POST',
             body: JSON.stringify({
-              pautas: alvos.map((topico) => ({
-                titulo: topico.titulo,
-                url: topico.url,
-                veiculo: topico.veiculo || 'Web',
-                resumo: topico.resumo || '',
-                imagem: topico.imagem || null,
-                data: topico.data || null,
-                dataTimestamp: Number(topico.dataTimestamp) || null,
-                nicho: topico.tema || null,
-                canal: 'noticias',
-                score: Number(topico.calor) || 0,
-              })),
+              pautas: alvos.map(pautaParaFila),
               intervalo_minutos: minutos,
               facebook_page_id: pagina.value || null,
               foto_original_se_falhar: true,
@@ -1232,15 +1331,17 @@
           resultadoLote.append(' ', acompanhar);
           setStatus(entraram ? `${entraram} matéria(s) agendada(s).` : 'Nenhuma matéria entrou na fila.');
           if (entraram) {
-            const adicionadas = new Set((data.adicionadas || []).map((a) => a.url));
+            const adicionadas = new Map((data.adicionadas || []).map((a) => [a.url, a]));
             itens.forEach((item) => {
-              if (!adicionadas.has(item.topico.url)) return;
+              const adicionada = adicionadas.get(item.topico.url);
+              if (!adicionada) return;
               item.card.classList.add('is-agendada');
-              const botaoCard = item.card.querySelector('.mia-x-card-gerar');
+              const botaoCard = item.card.querySelector('.mia-x-card-publicar') || item.card.querySelector('.mia-x-card-gerar');
               if (botaoCard) {
                 botaoCard.disabled = true;
                 botaoCard.textContent = 'Na fila';
               }
+              acompanharPublicacao(adicionada.id, item.card, botaoCard || document.createElement('button'));
             });
             limparSelecaoAtual();
           }
@@ -1416,6 +1517,44 @@
           }
         });
         acoes.appendChild(gerarUm);
+
+        if (podeSalvarRascunho && t.url) {
+          const publicarUm = document.createElement('button');
+          publicarUm.type = 'button';
+          publicarUm.className = 'mia-x-card-publicar';
+          publicarUm.textContent = 'Publicar';
+          publicarUm.title = 'Escreve, gera a imagem com IA e publica na página escolhida acima, sozinha no servidor';
+          publicarUm.addEventListener('click', async (ev) => {
+            ev.stopPropagation();
+            const nomePagina = pagina.selectedOptions[0]?.textContent || 'página padrão';
+            const minutos = Number(intervalo.value) || 10;
+            if (!confirm(`Publicar em ${nomePagina}?\n\n“${t.titulo}”\n\nA matéria é escrita, ganha imagem com IA e publica sozinha assim que ficar pronta (leva alguns minutos). Se já houver outras na fila, sai ${minutos === 60 ? '1 hora' : `${minutos} min`} depois da anterior.`)) return;
+            publicarUm.disabled = true;
+            publicarUm.textContent = 'Enviando…';
+            try {
+              const data = await apiJson(`${API}/furos/auto/fila`, {
+                method: 'POST',
+                body: JSON.stringify({
+                  pautas: [pautaParaFila(t)],
+                  intervalo_minutos: minutos,
+                  facebook_page_id: pagina.value || null,
+                  foto_original_se_falhar: true,
+                }),
+              });
+              const adicionada = (data.adicionadas || [])[0];
+              if (!adicionada) throw new Error(`Não entrou na fila: ${(data.ignoradas || [])[0]?.motivo || 'pauta inválida'}`);
+              publicarUm.textContent = 'Na fila';
+              card.classList.add('is-agendada');
+              acompanharPublicacao(adicionada.id, card, publicarUm);
+              setStatus(`Publicando em ${nomePagina}: acompanhe no card ou em Piloto automático.`);
+            } catch (err) {
+              publicarUm.disabled = false;
+              publicarUm.textContent = 'Publicar';
+              setStatus(err.message || 'Não foi possível publicar.');
+            }
+          });
+          acoes.appendChild(publicarUm);
+        }
         card.appendChild(acoes);
 
         checkWrap.addEventListener('click', (ev) => ev.stopPropagation());
