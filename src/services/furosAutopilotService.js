@@ -902,9 +902,12 @@ async function avancarEscrita(row) {
     : null;
   if ((Number(noCaminho?.n) || 0) + (Number(agendadasDaIa?.n) || 0) >= BUFFER_ALVO) return;
 
-  const item = await soQuandoPermitido(db(ITENS).where({ user_id: userId, status: 'na_fila' }), row)
-    .orderByRaw(ORDEM_FILA)
-    .first();
+  // YouTube limitando o servidor: os vídeos esperam na fila (em vez de
+  // falharem um a um) e o piloto segue com as outras pautas.
+  const youtubeEmPausa = require('./youtubeLimiter').emPausa();
+  let naFila = soQuandoPermitido(db(ITENS).where({ user_id: userId, status: 'na_fila' }), row);
+  if (youtubeEmPausa) naFila = naFila.whereNot('canal', 'youtube');
+  const item = await naFila.orderByRaw(ORDEM_FILA).first();
   if (!item) return;
 
   escrevendo.add(userId);

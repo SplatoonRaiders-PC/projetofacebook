@@ -91,8 +91,15 @@ function cookieDoYoutube() {
   }
 }
 
-function rodarBuscaYoutube(entrada, timeoutMs = 45_000) {
-  return new Promise((resolve) => {
+async function rodarBuscaYoutube(entrada, timeoutMs = 90_000) {
+  const youtubeLimiter = require('./youtubeLimiter');
+  // Em pausa por bloqueio do YouTube: nem tenta (ver youtubeLimiter).
+  try {
+    await youtubeLimiter.esperarVez();
+  } catch (err) {
+    return { itens: [], erro: err.message };
+  }
+  const resultado = await new Promise((resolve) => {
     const child = spawn(process.execPath, [SCRIPT_BUSCA_YOUTUBE], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
     let stdout = '';
     let stderr = '';
@@ -123,18 +130,23 @@ function rodarBuscaYoutube(entrada, timeoutMs = 45_000) {
         resolve({ itens: [], erro: err.message });
       }
     });
-    child.stdin.end(JSON.stringify({ ...entrada, cookie: cookieDoYoutube() }));
+    child.stdin.end(JSON.stringify({ ...entrada, cookie: cookieDoYoutube(), intervaloMs: Math.min(youtubeLimiter.INTERVALO_MS, 3_000) }));
   });
+  if (resultado.erro) youtubeLimiter.registrarFalha(new Error(resultado.erro));
+  else if ((resultado.itens || []).length) youtubeLimiter.registrarSucesso();
+  return resultado;
 }
 
 /**
  * @param {{ consultas: Array<{ consulta: string, nicho: string }>, horas: number, limitePorConsulta?: number }} opts
  */
 /**
- * Mesma busca em 10 min (piloto a cada 5 min, editor clicando de novo)
- * reaproveita o resultado em vez de consultar o YouTube outra vez.
+ * Mesma busca em 30 min (piloto a cada 5 min, editor clicando de novo)
+ * reaproveita o resultado em vez de consultar o YouTube outra vez: o
+ * YouTube limita por IP e a busca do piloto era a maior parte do volume.
+ * Ajustável: YOUTUBE_BUSCA_CACHE_MIN.
  */
-const CACHE_YOUTUBE_MS = 10 * 60 * 1000;
+const CACHE_YOUTUBE_MS = Math.max(1, Number(process.env.YOUTUBE_BUSCA_CACHE_MIN) || 30) * 60 * 1000;
 const cacheYoutube = new Map();
 
 function buscaYoutubeComCache(entrada) {

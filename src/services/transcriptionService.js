@@ -5,6 +5,7 @@ const crypto = require('crypto');
 const { spawn, spawnSync } = require('child_process');
 const youtubedlExec = require('youtube-dl-exec');
 const { runYtDlp, detectPlatformFromUrl } = require('./ytDlpAuth');
+const youtubeLimiter = require('./youtubeLimiter');
 const { env } = require('../config/env');
 const { extractAudioWav } = require('./ffmpegService');
 const { storageAbsolutePath } = require('./downloadService');
@@ -103,6 +104,19 @@ function ytDlpExecutable() {
     if (fs.existsSync(candidate)) return youtubedlExec.create(candidate);
   }
   return youtubedlExec;
+}
+
+/** GET ao YouTube no ritmo do limitador; 429 inicia a pausa geral. */
+async function youtubeGet(url, config) {
+  await youtubeLimiter.esperarVez();
+  try {
+    const response = await axios.get(url, config);
+    youtubeLimiter.registrarSucesso();
+    return response;
+  } catch (error) {
+    youtubeLimiter.registrarFalha(error);
+    throw error;
+  }
 }
 
 function runYtDlpForUrl(url, flags, authOpts = {}) {
@@ -523,7 +537,7 @@ async function fetchYouTubeMetadataWithoutYtDlp(url) {
   };
 
   try {
-    const response = await axios.get('https://www.youtube.com/watch', {
+    const response = await youtubeGet('https://www.youtube.com/watch', {
       params: { v: videoId, hl: 'pt-BR', persist_hl: 1 },
       responseType: 'text',
       timeout: Math.min(LIMITES.legendasMs, 20_000),
@@ -536,7 +550,7 @@ async function fetchYouTubeMetadataWithoutYtDlp(url) {
   }
 
   try {
-    const response = await axios.get('https://www.youtube.com/oembed', {
+    const response = await youtubeGet('https://www.youtube.com/oembed', {
       params: { url: `https://www.youtube.com/watch?v=${videoId}`, format: 'json' },
       timeout: 15_000,
       headers,
@@ -651,7 +665,8 @@ function getYouTubeCookieHeader() {
   }
 }
 
-function generateYouTubePoToken(videoId, cookieHeader = '') {
+async function generateYouTubePoToken(videoId, cookieHeader = '') {
+  await youtubeLimiter.esperarVez();
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [YOUTUBE_PO_TOKEN_SCRIPT, videoId], {
       windowsHide: true,
@@ -731,7 +746,8 @@ async function getYouTubePoToken(videoId, cookieHeader = '') {
   return pending;
 }
 
-function getYouTubeCaptionTrackFromInnerTube(videoId, cookieHeader = '') {
+async function getYouTubeCaptionTrackFromInnerTube(videoId, cookieHeader = '') {
+  await youtubeLimiter.esperarVez();
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [YOUTUBE_CAPTION_TRACK_SCRIPT, videoId], {
       windowsHide: true,
@@ -785,7 +801,7 @@ async function downloadYouTubeCaption(baseUrl, videoId, cookieHeader = '') {
   if (needsToken) poToken = await getYouTubePoToken(videoId, cookieHeader);
 
   const request = async () => {
-    const response = await axios.get(buildYouTubeCaptionUrl(baseUrl, { poToken }), {
+    const response = await youtubeGet(buildYouTubeCaptionUrl(baseUrl, { poToken }), {
       responseType: 'text',
       timeout: Math.min(LIMITES.legendasMs, 25_000),
       headers: {
@@ -856,7 +872,7 @@ async function tryYouTubeCaptionsFromPage(url) {
 
   for (const cookieHeader of youTubeCookieAttempts()) {
     try {
-      const response = await axios.get('https://www.youtube.com/watch', {
+      const response = await youtubeGet('https://www.youtube.com/watch', {
         params: { v: videoId, hl: 'pt-BR', persist_hl: 1 },
         responseType: 'text',
         timeout: Math.min(LIMITES.legendasMs, 20_000),

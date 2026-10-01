@@ -156,7 +156,20 @@ function runYtDlp(executable, url, flags = {}, authOpts = {}) {
     delete merged.noJsRuntimes;
   }
 
-  return executable(url, merged, spawnOpts).catch((error) => {
+  // YouTube: uma chamada por vez, com intervalo, e nada enquanto durar a
+  // pausa por bloqueio (ver youtubeLimiter).
+  // `platform` cai em "youtube" para qualquer link desconhecido; vale o endereço.
+  const youtube = /youtube\.com|youtu\.be|^ytsearch/i.test(String(url || '')) ? require('./youtubeLimiter') : null;
+  const executar = youtube
+    ? youtube.esperarVez().then(() => executable(url, merged, spawnOpts)).then((resultado) => {
+        youtube.registrarSucesso();
+        return resultado;
+      })
+    : executable(url, merged, spawnOpts);
+
+  return executar.catch((error) => {
+    if (error?.code === 'YOUTUBE_EM_PAUSA') throw error;
+    if (youtube) youtube.registrarFalha(error);
     const raw = String(error?.stderr || error?.message || '').toLowerCase();
     const temCookies = Object.keys(auth).length > 0;
 

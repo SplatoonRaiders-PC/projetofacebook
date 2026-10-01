@@ -65,9 +65,25 @@ try {
 
   const vistos = new Set();
   const itens = [];
-  const respostas = await Promise.allSettled(
-    consultas.map((query) => youtube.actions.execute('/search', { query, params }).then((r) => ({ query, r })))
-  );
+  // Uma consulta por vez, com intervalo: doze buscas no mesmo instante é o
+  // tipo de rajada que faz o YouTube limitar o IP (HTTP 429).
+  const intervaloMs = Math.min(Math.max(Number(entrada.intervaloMs) || 0, 0), 10_000);
+  const respostas = [];
+  let bloqueio = null;
+  for (const [indice, query] of consultas.entries()) {
+    if (indice && intervaloMs) await new Promise((resolve) => setTimeout(resolve, intervaloMs));
+    try {
+      respostas.push({ status: 'fulfilled', value: { query, r: await youtube.actions.execute('/search', { query, params }) } });
+    } catch (error) {
+      respostas.push({ status: 'rejected' });
+      // Limitado: para aqui em vez de gastar as consultas que faltam.
+      if (/429|too many requests|not a bot|unusual traffic/i.test(String(error?.message || error))) {
+        bloqueio = String(error?.message || error);
+        break;
+      }
+    }
+  }
+  if (bloqueio && !respostas.some((r) => r.status === 'fulfilled')) fail(`HTTP 429: ${bloqueio}`);
   for (const resposta of respostas) {
     if (resposta.status !== 'fulfilled') continue;
     const { query, r } = resposta.value;
