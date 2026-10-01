@@ -150,7 +150,46 @@ async function salvarModelosMateria(req, res, next) {
   }
 }
 
+/** Modelo fixo por tarefa (piloto automático e títulos) e o que pode ser escolhido. */
+async function respostaModelosTarefa(escolhas) {
+  const iaModeloTarefa = require('../services/iaModeloTarefaService');
+  const { modelos, gatewayOnline } = await require('../services/materiaModelosService').listarCatalogo();
+  return {
+    ok: true,
+    gatewayOnline,
+    tarefas: Object.entries(iaModeloTarefa.TAREFAS).map(([id, nome]) => ({ id, nome })),
+    escolhas: escolhas || (await iaModeloTarefa.todos()),
+    modelos: modelos.map(({ id, nome, provedor, disponivel }) => ({ id, nome, provedor, disponivel })),
+  };
+}
+
+async function modelosTarefa(_req, res, next) {
+  try {
+    return res.json(await respostaModelosTarefa());
+  } catch (err) {
+    return next(err);
+  }
+}
+
+async function salvarModelosTarefa(req, res, next) {
+  try {
+    const iaModeloTarefa = require('../services/iaModeloTarefaService');
+    const { modelos } = await require('../services/materiaModelosService').listarCatalogo();
+    const escolhas = await iaModeloTarefa.salvar(req.body?.escolhas || {}, {
+      userId: req.session.userId,
+      permitidos: modelos.map((m) => m.id),
+    });
+    console.info(`[ia-modelo-tarefa] user ${req.session.userId}: ${JSON.stringify(escolhas)}`);
+    return res.json(await respostaModelosTarefa(escolhas));
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    return next(err);
+  }
+}
+
 module.exports = {
+  modelosTarefa,
+  salvarModelosTarefa,
   pausaIa,
   salvarPausaIa,
   modelosMateria,

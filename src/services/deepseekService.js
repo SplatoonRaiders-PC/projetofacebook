@@ -381,6 +381,15 @@ async function chatCompletionClaudeObrigatorio(messages, options = {}) {
 }
 
 /**
+ * Títulos (sugerir e alternativos) saem do modelo fixado pelo administrador em
+ * /claude. Sem modelo fixado, segue o modelo da requisição, como antes.
+ */
+async function comModeloDeTitulos(chamada) {
+  const fixo = await require('./iaModeloTarefaService').modeloDaTarefa('titulos').catch(() => null);
+  return require('./tokenFreeGatewayService').comModelo(fixo, chamada);
+}
+
+/**
  * Igual ao chatCompletion, mas em streaming (SSE da DeepSeek).
  * Chama onDelta(pedaco) a cada token e devolve o texto completo.
  * Em qualquer falha de stream, cai para a chamada normal.
@@ -2198,12 +2207,12 @@ ${attempt > 1 ? '- Tentativa anterior falhou por repetir o título. Varie bastan
           ? 1.2
           : 1.05;
     const completarTitulo = somenteClaude ? chatCompletionClaudeObrigatorio : chatCompletion;
-    const raw = await completarTitulo(baseMessages(attempt), {
+    const raw = await comModeloDeTitulos(() => completarTitulo(baseMessages(attempt), {
       temperature: Math.min(temp, 1.3),
       json: true,
       tarefa,
       conversationName: 'ViralizeAI — título sugerido pelo Claude',
-    });
+    }));
     const titulo = finalizarTituloComMarca(parseTituloFromAi(raw), marcaModeloArte);
     ultimoTitulo = titulo;
     if (!titulo) continue;
@@ -2372,12 +2381,12 @@ ${
       // Temperatura menor ajuda a variar a formulação sem trocar o assunto.
       // eslint-disable-next-line no-await-in-loop
       const completarTitulos = somenteClaude ? chatCompletionClaudeObrigatorio : chatCompletion;
-      raw = await completarTitulos(messages, {
+      raw = await comModeloDeTitulos(() => completarTitulos(messages, {
         temperature: tentativa === 1 ? 0.72 : 0.6,
         json: true,
         tarefa,
         conversationName: 'ViralizeAI — títulos sugeridos pelo Claude',
-      });
+      }));
     } catch (err) {
       // IA parada em /claude: quem pediu os títulos precisa ver o aviso.
       if (err.iaPausada) throw err;

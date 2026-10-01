@@ -785,6 +785,10 @@ async function escanear(row, { forcar = false } = {}) {
  */
 async function modeloDoPiloto(row) {
   if (!require('./deepseekService').usarTokenFree('conversa')) return null;
+  // Modelo fixado pelo administrador em /claude vale para todo piloto,
+  // independente do que o editor escolheu por último no chat.
+  const fixo = await require('./iaModeloTarefaService').modeloDaTarefa('piloto');
+  if (fixo) return fixo;
   return require('./materiaModelosService').resolverModelo(row.modelo);
 }
 
@@ -1295,7 +1299,8 @@ async function tick() {
         const row = await aplicarAgenda(bruto, agora, pilotoAgenda);
         if (bruto.ativo && !row.ativo) usuariosAtivos.delete(Number(bruto.user_id));
         await limparVelhas(row.user_id);
-        const iaParada = pausa.geral || Boolean(row.modelo && pausa.modelos.includes(String(row.modelo)));
+        const modeloEfetivo = await modeloDoPiloto(row).catch(() => row.modelo);
+        const iaParada = pausa.geral || Boolean(modeloEfetivo && pausa.modelos.includes(String(modeloEfetivo)));
         const ultimo = row.ultimo_scan_at ? new Date(row.ultimo_scan_at).getTime() : 0;
         // Varredura só com o Automatizar ligado.
         if (!iaParada && row.ativo && Date.now() - ultimo >= SCAN_MS) void escanear(row);

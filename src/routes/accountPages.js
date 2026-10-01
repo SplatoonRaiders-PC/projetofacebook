@@ -46,5 +46,7 @@ router.get('/api/admin/claude-gateway/modelos-materia', requireAuth, requireAdmi
 router.get('/api/admin/claude-gateway/pausa', requireAuth, requireAdmin, tokenFreeAdminController.pausaIa);
 router.put('/api/admin/claude-gateway/pausa', requireAuth, requireAdmin, tokenFreeAdminController.salvarPausaIa);
 router.put('/api/admin/claude-gateway/modelos-materia', requireAuth, requireAdmin, tokenFreeAdminController.salvarModelosMateria);
+router.get('/api/admin/claude-gateway/modelos-tarefa', requireAuth, requireAdmin, tokenFreeAdminController.modelosTarefa);
+router.put('/api/admin/claude-gateway/modelos-tarefa', requireAuth, requireAdmin, tokenFreeAdminController.salvarModelosTarefa);
 
 module.exports = router;
