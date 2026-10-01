@@ -3,7 +3,14 @@
  * Páginas → redirect /login; APIs → 401 JSON.
  */
 function requireAuth(req, res, next) {
-  if (req.session && req.session.userId) return next();
+  if (req.session && req.session.userId) {
+    // Resposta de um login nunca pode ser reaproveitada por outro: sem isto,
+    // um cache (navegador, proxy do servidor ou CDN) podia servir o status
+    // do piloto automático, as matérias etc. de quem entrou antes.
+    res.set('Cache-Control', 'no-store, private');
+    res.vary('Cookie');
+    return next();
+  }
 
   const isApi = req.originalUrl.startsWith('/api/') || req.xhr || req.headers.accept?.includes('application/json');
   if (isApi) {

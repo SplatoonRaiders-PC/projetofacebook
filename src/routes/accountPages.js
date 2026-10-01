@@ -43,6 +43,8 @@ router.post('/api/admin/claude-gateway/authorize', requireAuth, requireAdmin, to
 router.post('/api/admin/claude-gateway/authorize/continue', requireAuth, requireAdmin, tokenFreeAdminController.continuarAutorizacao);
 router.post('/api/admin/claude-gateway/test', requireAuth, requireAdmin, tokenFreeAdminController.testar);
 router.get('/api/admin/claude-gateway/modelos-materia', requireAuth, requireAdmin, tokenFreeAdminController.modelosMateria);
+router.get('/api/admin/claude-gateway/pausa', requireAuth, requireAdmin, tokenFreeAdminController.pausaIa);
+router.put('/api/admin/claude-gateway/pausa', requireAuth, requireAdmin, tokenFreeAdminController.salvarPausaIa);
 router.put('/api/admin/claude-gateway/modelos-materia', requireAuth, requireAdmin, tokenFreeAdminController.salvarModelosMateria);
 
 module.exports = router;

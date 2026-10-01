@@ -121,6 +121,8 @@ async function gerarESalvarTitulosAlternativos({
     }
     return titulos;
   } catch (err) {
+    // IA parada em /claude: o editor precisa ver a mensagem de créditos.
+    if (err.iaPausada) throw err;
     console.warn('[titulos-alternativos] salvar:', err.message);
     return [];
   }

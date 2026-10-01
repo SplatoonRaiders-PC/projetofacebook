@@ -73,6 +73,59 @@ async function testar(_req, res, next) {
   }
 }
 
+/** Modelos que o administrador pode pausar: gateway, DeepSeek, Claude API e imagem. */
+async function catalogoDePausa() {
+  const { env } = require('../config/env');
+  const materiaModelos = require('../services/materiaModelosService');
+  let doGateway = [];
+  try {
+    doGateway = (await materiaModelos.listarCatalogo()).modelos || [];
+  } catch {
+    doGateway = [];
+  }
+  const extras = [
+    { id: env.deepseekWriterModel || env.deepseekModel, uso: 'DeepSeek (redação e tarefas auxiliares)' },
+    { id: env.deepseekModel, uso: 'DeepSeek' },
+    { id: env.claudeWriterModel, uso: 'API oficial do Claude' },
+    { id: String(process.env.CHATGPT_IMAGE_MODEL || 'gpt-5.6').trim(), uso: 'ChatGPT (texto e imagens)' },
+  ];
+  const vistos = new Set();
+  const lista = [];
+  for (const item of [...doGateway.map((m) => ({ id: m.id, nome: m.nome, uso: 'Gateway (Claude/ChatGPT web)' })), ...extras]) {
+    const id = String(item.id || '').trim();
+    if (!id || vistos.has(id)) continue;
+    vistos.add(id);
+    lista.push({ id, nome: item.nome || materiaModelos.nomeModeloHumano(id), uso: item.uso });
+  }
+  return lista;
+}
+
+async function pausaIa(_req, res, next) {
+  try {
+    const iaPausa = require('../services/iaPausaService');
+    const [estado, modelos] = await Promise.all([iaPausa.estado(), catalogoDePausa()]);
+    return res.json({ ok: true, ...estado, mensagem: iaPausa.MENSAGEM, catalogo: modelos });
+  } catch (err) {
+    return next(err);
+  }
+}
+
+async function salvarPausaIa(req, res, next) {
+  try {
+    const iaPausa = require('../services/iaPausaService');
+    const estado = await iaPausa.salvar({
+      geral: req.body?.geral === true,
+      modelos: req.body?.modelos,
+      userId: req.session.userId,
+    });
+    console.info(`[ia-pausa] user ${req.session.userId}: geral=${estado.geral} modelos=${estado.modelos.join(',') || '-'}`);
+    return res.json({ ok: true, ...estado, mensagem: iaPausa.MENSAGEM, catalogo: await catalogoDePausa() });
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    return next(err);
+  }
+}
+
 async function modelosMateria(_req, res, next) {
   try {
     const materiaModelos = require('../services/materiaModelosService');
@@ -98,6 +151,8 @@ async function salvarModelosMateria(req, res, next) {
 }
 
 module.exports = {
+  pausaIa,
+  salvarPausaIa,
   modelosMateria,
   salvarModelosMateria,
   index,

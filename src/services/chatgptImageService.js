@@ -801,6 +801,10 @@ function recusaDaApi(err) {
 }
 
 async function gerarImagem(args) {
+  // "Parar IA": pausar o ChatGPT (ou tudo) também para a geração de imagem.
+  const pausa = require('./iaPausaService');
+  await pausa.garantirLiberada(CHATGPT_MODEL);
+  if (String(process.env.OPENAI_API_KEY || '').trim()) await pausa.garantirLiberada(OPENAI_IMAGE_MODEL);
   if (String(process.env.OPENAI_API_KEY || '').trim()) {
     const inicio = Date.now();
     try {

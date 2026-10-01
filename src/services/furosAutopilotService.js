@@ -1286,22 +1286,27 @@ async function tick() {
     }
     const agora = new Date();
     const pilotoAgenda = require('./pilotoAgenda');
+    // "Parar IA" em /claude: a fila espera em vez de virar erro de créditos.
+    // O que já foi escrito e agendado continua publicando (não usa IA).
+    const pausa = await require('./iaPausaService').estado();
+    const modeloImagem = String(process.env.CHATGPT_IMAGE_MODEL || 'gpt-5.6').trim();
     for (const bruto of configs) {
       try {
         const row = await aplicarAgenda(bruto, agora, pilotoAgenda);
         if (bruto.ativo && !row.ativo) usuariosAtivos.delete(Number(bruto.user_id));
         await limparVelhas(row.user_id);
+        const iaParada = pausa.geral || Boolean(row.modelo && pausa.modelos.includes(String(row.modelo)));
         const ultimo = row.ultimo_scan_at ? new Date(row.ultimo_scan_at).getTime() : 0;
         // Varredura só com o Automatizar ligado.
-        if (row.ativo && Date.now() - ultimo >= SCAN_MS) void escanear(row);
-        void avancarEscrita(row).catch((err) => console.warn('[furos-auto] escrita:', err.message));
+        if (!iaParada && row.ativo && Date.now() - ultimo >= SCAN_MS) void escanear(row);
+        if (!iaParada) void avancarEscrita(row).catch((err) => console.warn('[furos-auto] escrita:', err.message));
         await agendarProntas(row);
         await acompanharAgendadas(row.user_id);
       } catch (err) {
         console.warn(`[furos-auto] user ${bruto.user_id}:`, err.message);
       }
     }
-    await preencherImagens();
+    if (!pausa.geral && !pausa.modelos.includes(modeloImagem)) await preencherImagens();
   } catch (err) {
     console.error('[furos-auto] tick:', err.message);
   } finally {

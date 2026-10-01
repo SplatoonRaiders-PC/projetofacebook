@@ -37,8 +37,12 @@ async function login(req, res) {
       return res.status(401).json({ error: 'Usuário ou senha inválidos' });
     }
 
+    // Sessão nova a cada login: nada da sessão anterior (de outro usuário,
+    // no mesmo navegador) é reaproveitado.
+    await new Promise((resolve, reject) => req.session.regenerate((err) => (err ? reject(err) : resolve())));
     req.session.userId = user.id;
     req.session.userName = user.nome;
+    await new Promise((resolve, reject) => req.session.save((err) => (err ? reject(err) : resolve())));
 
     if (wantsHtml) return res.redirect(next);
 

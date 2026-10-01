@@ -270,6 +270,8 @@ async function chatCompletion(
     conversationName = null,
   } = {}
 ) {
+  // "Parar IA" geral vale antes de qualquer provedor (inclusive o gratuito).
+  await require('./iaPausaService').garantirLiberada();
   const tarefaResolvida = inferirTarefa(messages, tarefa);
   const gratis = await tentarFreeTier(messages, {
     temperature,
@@ -295,6 +297,7 @@ async function chatCompletion(
   }
   assertDeepseek();
   const selectedModel = String(model || DEEPSEEK_MODEL);
+  await require('./iaPausaService').garantirLiberada(selectedModel);
   const pensar = resolverThinking(thinking);
   const body = {
     model: selectedModel,
@@ -336,6 +339,7 @@ async function chatCompletion(
  * oficial do Claude; se nenhum estiver disponível, falha de forma clara.
  */
 async function chatCompletionClaudeObrigatorio(messages, options = {}) {
+  await require('./iaPausaService').garantirLiberada();
   const tarefa = 'conversa';
   const tokenFree = require('./tokenFreeGatewayService');
   let erroTokenFree = null;
@@ -350,6 +354,8 @@ async function chatCompletionClaudeObrigatorio(messages, options = {}) {
           options.conversationName || 'ViralizeAI — títulos sugeridos pelo Claude',
       });
     } catch (err) {
+      // Modelo pausado em /claude: não tenta a API paga do Claude por fora.
+      if (err.iaPausada) throw err;
       erroTokenFree = err;
       console.warn('[titulos-claude] token-free falhou; verificando API Claude:', err.message);
     }
@@ -393,6 +399,7 @@ async function chatCompletionStream(
     forceDeepseek = false,
   } = {}
 ) {
+  await require('./iaPausaService').garantirLiberada();
   const tarefaResolvida = tarefa || 'conversa';
   if (!forceDeepseek) {
     const gratisStream = await tentarFreeTierStream(messages, {
@@ -425,6 +432,7 @@ async function chatCompletionStream(
   }
   assertDeepseek();
   const selectedModel = String(model || DEEPSEEK_MODEL);
+  await require('./iaPausaService').garantirLiberada(selectedModel);
   const pensar = resolverThinking(thinking);
   const body = {
     model: selectedModel,
@@ -2371,6 +2379,8 @@ ${
         conversationName: 'ViralizeAI — títulos sugeridos pelo Claude',
       });
     } catch (err) {
+      // IA parada em /claude: quem pediu os títulos precisa ver o aviso.
+      if (err.iaPausada) throw err;
       // Alternativas são um extra: nunca podem derrubar a geração da matéria.
       console.warn('[titulos-alternativos]', err.message);
       break;

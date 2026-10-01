@@ -249,6 +249,8 @@ async function chatCompletion(
   } = {}
 ) {
   assertConfigured(tarefa);
+  // "Parar IA" em /claude: geral ou só este modelo.
+  await require('./iaPausaService').garantirLiberada(modeloAtual());
   const inicio = Date.now();
 
   try {
@@ -292,6 +294,8 @@ async function chatCompletionStream(
   } = {}
 ) {
   assertConfigured(tarefa);
+  // "Parar IA" em /claude: geral ou só este modelo.
+  await require('./iaPausaService').garantirLiberada(modeloAtual());
   const inicio = Date.now();
   let full = '';
   const limpador = criarLimpadorDeStream();

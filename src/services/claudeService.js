@@ -298,6 +298,7 @@ async function chatCompletion(
 ) {
   const perfil = perfilDaTarefa(tarefa);
   const modelo = model || perfil.modelo;
+  await require('./iaPausaService').garantirLiberada(modelo);
   const { system, conversa } = montarSystem(messages);
 
   if (!conversa.length) {
@@ -360,6 +361,7 @@ async function chatCompletionStream(
 ) {
   const perfil = perfilDaTarefa(tarefa);
   const modelo = model || perfil.modelo;
+  await require('./iaPausaService').garantirLiberada(modelo);
   const { system, conversa } = montarSystem(messages);
   const pensar = THINKING_MODO === 'adaptive' || (THINKING_MODO === 'auto' && thinking);
 
