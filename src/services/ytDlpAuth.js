@@ -180,7 +180,10 @@ function runYtDlp(executable, url, flags = {}, authOpts = {}) {
           'O Facebook pediu autenticação. Configure YTDLP_FB_COOKIES_FILE (cookies Netscape do Facebook).',
       },
       youtube: {
-        expirada: 'A sessão usada para acessar o YouTube expirou. Atualize os cookies e tente novamente.',
+        // "Confirm you're not a bot" com cookies: sessão vencida OU IP do
+        // servidor marcado pelo YouTube. Só a mensagem não distingue os dois.
+        expirada:
+          'O YouTube recusou a leitura mesmo com os cookies (verificação anti-bot): a sessão venceu ou o IP do servidor está bloqueado. Teste em /cookies.',
         ausente:
           'O YouTube solicitou autenticação. Configure YTDLP_COOKIES_FROM_BROWSER no ambiente local ou YTDLP_COOKIES_FILE no servidor.',
       },

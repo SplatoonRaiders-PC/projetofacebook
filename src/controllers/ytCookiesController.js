@@ -119,6 +119,27 @@ async function upload(req, res, next) {
 async function test(_req, res) {
   try {
     const info = await fetchLinkMetadata(TEST_VIDEO_URL);
+    // O vídeo de teste passa mesmo com o servidor limitado. A página do vídeo
+    // é o que as legendas usam: se ela devolve 429, as matérias de YouTube
+    // falham apesar dos cookies bons.
+    const paginaStatus = await require('axios')
+      .get(TEST_VIDEO_URL, {
+        timeout: 15_000,
+        responseType: 'text',
+        validateStatus: () => true,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/131 Safari/537.36',
+          'Accept-Language': 'pt-BR,pt;q=0.9,en;q=0.7',
+        },
+      })
+      .then((r) => r.status)
+      .catch(() => 0);
+    if (paginaStatus === 429 || paginaStatus === 403) {
+      return res.status(502).json({
+        ok: false,
+        error: `Os cookies estão válidos, mas o YouTube está limitando o IP deste servidor (HTTP ${paginaStatus}). Legendas e vídeos recentes vão falhar até o bloqueio passar; trocar os cookies não resolve.`,
+      });
+    }
     res.json({ ok: true, titulo: info.titulo, message: 'Cookies válidos — YouTube respondeu normalmente.' });
   } catch (err) {
     res.status(502).json({ ok: false, error: humanizeYtDlpError(err) });
